@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package coordinode.v1.replication;
+
+// Write concern levels.
+enum WriteConcernLevel {
+  WRITE_CONCERN_LEVEL_UNSPECIFIED = 0;
+  // Fire-and-forget (no acknowledgement).
+  WRITE_CONCERN_LEVEL_W0 = 1;
+  // Acknowledged by leader only.
+  WRITE_CONCERN_LEVEL_W1 = 2;
+  // Acknowledged by majority of replicas.
+  WRITE_CONCERN_LEVEL_MAJORITY = 3;
+}
+
+// Write concern configuration.
+message WriteConcern {
+  WriteConcernLevel level = 1;
+  // Require WAL fsync before acknowledgement.
+  bool journal = 2;
+  // Timeout in milliseconds (0 = no timeout).
+  uint32 timeout_ms = 3;
+}
+
+// Read concern levels.
+enum ReadConcernLevel {
+  READ_CONCERN_LEVEL_UNSPECIFIED = 0;
+  // Read from local replica (may be stale).
+  READ_CONCERN_LEVEL_LOCAL = 1;
+  // Read data committed by majority.
+  READ_CONCERN_LEVEL_MAJORITY = 2;
+  // Linearizable read (strongest guarantee).
+  READ_CONCERN_LEVEL_LINEARIZABLE = 3;
+  // Read from a consistent MVCC snapshot.
+  READ_CONCERN_LEVEL_SNAPSHOT = 4;
+}
+
+// Read concern configuration.
+message ReadConcern {
+  ReadConcernLevel level = 1;
+}
+
+// Read preference for routing read operations.
+enum ReadPreference {
+  READ_PREFERENCE_UNSPECIFIED = 0;
+  READ_PREFERENCE_PRIMARY = 1;
+  READ_PREFERENCE_PRIMARY_PREFERRED = 2;
+  READ_PREFERENCE_SECONDARY = 3;
+  READ_PREFERENCE_SECONDARY_PREFERRED = 4;
+  READ_PREFERENCE_NEAREST = 5;
+}

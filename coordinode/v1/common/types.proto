@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package coordinode.v1.common;
+
+// Unique identifier for a node in the graph.
+message NodeId {
+  uint64 id = 1;
+}
+
+// Unique identifier for an edge in the graph.
+message EdgeId {
+  uint64 id = 1;
+}
+
+// Hybrid Logical Clock timestamp.
+message HlcTimestamp {
+  uint64 wall_time = 1;
+  uint32 logical = 2;
+}
+
+// A typed property value (oneof for all supported types).
+message PropertyValue {
+  oneof value {
+    int64 int_value = 1;
+    double float_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    bytes bytes_value = 5;
+    HlcTimestamp timestamp_value = 6;
+    Vector vector_value = 7;
+    PropertyList list_value = 8;
+    PropertyMap map_value = 9;
+  }
+}
+
+// A dense float vector for vector search.
+message Vector {
+  repeated float values = 1;
+}
+
+// A list of property values (homogeneous arrays).
+message PropertyList {
+  repeated PropertyValue values = 1;
+}
+
+// A map of string keys to property values.
+message PropertyMap {
+  map<string, PropertyValue> entries = 1;
+}

@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package coordinode.v1.graph;
+
+import "google/api/annotations.proto";
+
+// BlobStore service: content-addressed chunk storage for large values.
+//
+// Values >= 4KB are split into 256KB chunks identified by SHA-256 hash.
+// Content-addressing provides automatic deduplication.
+service BlobService {
+  // Upload a blob as a stream of chunks.
+  // Returns the BlobRef (ordered chunk IDs + total size) for later retrieval.
+  rpc UploadBlob(stream BlobChunk) returns (UploadBlobResponse) {
+    option (google.api.http) = {
+      post: "/v1/blobs"
+      body: "*"
+    };
+  }
+
+  // Download a blob by its chunk IDs, returned as a stream of chunks.
+  rpc DownloadBlob(DownloadBlobRequest) returns (stream BlobChunk) {
+    option (google.api.http) = {
+      get: "/v1/blobs/{blob_id}"
+    };
+  }
+
+  // Delete a blob and its unreferenced chunks.
+  rpc DeleteBlob(DeleteBlobRequest) returns (DeleteBlobResponse) {
+    option (google.api.http) = {
+      delete: "/v1/blobs/{blob_id}"
+    };
+  }
+
+  // Get blob metadata (chunk count, total size) without downloading.
+  rpc GetBlobMeta(GetBlobMetaRequest) returns (BlobMeta) {
+    option (google.api.http) = {
+      get: "/v1/blobs/{blob_id}/meta"
+    };
+  }
+}
+
+// A single blob chunk in a streaming upload/download.
+message BlobChunk {
+  // Chunk data (up to 256KB per message).
+  bytes data = 1;
+
+  // Chunk sequence number (0-based, for ordering verification).
+  uint32 sequence = 2;
+}
+
+// Response after a complete blob upload.
+message UploadBlobResponse {
+  // Unique blob identifier (hex-encoded composite of chunk hashes).
+  string blob_id = 1;
+
+  // Ordered list of SHA-256 chunk hashes (hex, 64 chars each).
+  repeated string chunk_ids = 2;
+
+  // Total size of the uploaded blob in bytes.
+  uint64 total_size = 3;
+
+  // Number of chunks that were deduplicated (already existed).
+  uint32 dedup_chunks = 4;
+}
+
+// Request to download a blob.
+message DownloadBlobRequest {
+  // Blob identifier returned from UploadBlob.
+  string blob_id = 1;
+}
+
+// Request to delete a blob.
+message DeleteBlobRequest {
+  // Blob identifier.
+  string blob_id = 1;
+}
+
+// Response after blob deletion.
+message DeleteBlobResponse {
+  // Number of chunks actually deleted (excludes shared chunks still referenced).
+  uint32 chunks_deleted = 1;
+}
+
+// Request for blob metadata.
+message GetBlobMetaRequest {
+  // Blob identifier.
+  string blob_id = 1;
+}
+
+// Blob metadata.
+message BlobMeta {
+  // Blob identifier.
+  string blob_id = 1;
+
+  // Total size in bytes.
+  uint64 total_size = 2;
+
+  // Number of chunks.
+  uint32 chunk_count = 3;
+
+  // Ordered list of SHA-256 chunk hashes.
+  repeated string chunk_ids = 4;
+}

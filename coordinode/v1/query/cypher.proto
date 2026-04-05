@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package coordinode.v1.query;
+
+import "coordinode/v1/common/types.proto";
+import "google/api/annotations.proto";
+
+// OpenCypher-compatible query execution service.
+service CypherService {
+  // Execute an OpenCypher query and return results.
+  rpc ExecuteCypher(ExecuteCypherRequest) returns (ExecuteCypherResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/cypher"
+      body: "*"
+    };
+  }
+
+  // Explain an OpenCypher query plan without executing.
+  rpc ExplainCypher(ExplainCypherRequest) returns (ExplainCypherResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/cypher/explain"
+      body: "*"
+    };
+  }
+}
+
+message ExecuteCypherRequest {
+  string query = 1;
+  map<string, coordinode.v1.common.PropertyValue> parameters = 2;
+}
+
+message ExecuteCypherResponse {
+  repeated string columns = 1;
+  repeated Row rows = 2;
+  QueryStats stats = 3;
+}
+
+message Row {
+  repeated coordinode.v1.common.PropertyValue values = 1;
+}
+
+message QueryStats {
+  int64 nodes_created = 1;
+  int64 nodes_deleted = 2;
+  int64 edges_created = 3;
+  int64 edges_deleted = 4;
+  int64 properties_set = 5;
+  int64 execution_time_ms = 6;
+}
+
+message ExplainCypherRequest {
+  string query = 1;
+  map<string, coordinode.v1.common.PropertyValue> parameters = 2;
+}
+
+message ExplainCypherResponse {
+  QueryPlan plan = 1;
+}
+
+message QueryPlan {
+  string operator = 1;
+  map<string, string> details = 2;
+  repeated QueryPlan children = 3;
+  double estimated_rows = 4;
+}

@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package coordinode.v1.common;
+
+// Cursor-based pagination request parameters.
+message PaginationRequest {
+  // Maximum number of results to return.
+  int32 page_size = 1;
+  // Opaque cursor from a previous response.
+  string page_token = 2;
+}
+
+// Cursor-based pagination response metadata.
+message PaginationResponse {
+  // Opaque cursor for the next page. Empty if no more results.
+  string next_page_token = 1;
+  // Total count of matching results (if available, -1 if unknown).
+  int64 total_count = 2;
+}
+
+// Sort specification for query results.
+message SortOption {
+  string field = 1;
+  SortDirection direction = 2;
+}
+
+enum SortDirection {
+  SORT_DIRECTION_UNSPECIFIED = 0;
+  SORT_DIRECTION_ASC = 1;
+  SORT_DIRECTION_DESC = 2;
+}

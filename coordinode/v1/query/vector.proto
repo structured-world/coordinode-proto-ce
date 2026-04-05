@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package coordinode.v1.query;
+
+import "coordinode/v1/common/types.proto";
+import "coordinode/v1/graph/graph.proto";
+import "google/api/annotations.proto";
+
+// Vector search operations.
+service VectorService {
+  // Search for nearest neighbors by vector similarity.
+  rpc VectorSearch(VectorSearchRequest) returns (VectorSearchResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/vector/search"
+      body: "*"
+    };
+  }
+
+  // Hybrid search combining graph traversal and vector similarity.
+  rpc HybridSearch(HybridSearchRequest) returns (HybridSearchResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/vector/hybrid"
+      body: "*"
+    };
+  }
+}
+
+message VectorSearchRequest {
+  // Label to search within.
+  string label = 1;
+  // Property name containing vectors.
+  string property = 2;
+  // Query vector.
+  coordinode.v1.common.Vector query_vector = 3;
+  // Number of nearest neighbors to return.
+  uint32 top_k = 4;
+  // Distance metric (cosine, l2, dot, l1).
+  DistanceMetric metric = 5;
+}
+
+enum DistanceMetric {
+  DISTANCE_METRIC_UNSPECIFIED = 0;
+  DISTANCE_METRIC_COSINE = 1;
+  DISTANCE_METRIC_L2 = 2;
+  DISTANCE_METRIC_DOT = 3;
+  DISTANCE_METRIC_L1 = 4;
+}
+
+message VectorSearchResponse {
+  repeated VectorResult results = 1;
+}
+
+message VectorResult {
+  coordinode.v1.graph.Node node = 1;
+  float distance = 2;
+}
+
+message HybridSearchRequest {
+  // Starting node for graph traversal.
+  uint64 start_node_id = 1;
+  // Edge type to traverse.
+  string edge_type = 2;
+  // Max traversal depth.
+  uint32 max_depth = 3;
+  // Vector search parameters applied after traversal.
+  string vector_property = 4;
+  coordinode.v1.common.Vector query_vector = 5;
+  uint32 top_k = 6;
+  DistanceMetric metric = 7;
+}
+
+message HybridSearchResponse {
+  repeated VectorResult results = 1;
+}

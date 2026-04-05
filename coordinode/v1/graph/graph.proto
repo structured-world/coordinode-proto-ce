@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package coordinode.v1.graph;
+
+import "coordinode/v1/common/types.proto";
+import "coordinode/v1/common/pagination.proto";
+import "google/api/annotations.proto";
+
+// Core graph CRUD operations.
+service GraphService {
+  // Create a new node with the given labels and properties.
+  rpc CreateNode(CreateNodeRequest) returns (Node) {
+    option (google.api.http) = {
+      post: "/v1/graph/nodes"
+      body: "*"
+    };
+  }
+
+  // Get a node by its ID.
+  rpc GetNode(GetNodeRequest) returns (Node) {
+    option (google.api.http) = {
+      get: "/v1/graph/nodes/{node_id}"
+    };
+  }
+
+  // Create an edge between two nodes.
+  rpc CreateEdge(CreateEdgeRequest) returns (Edge) {
+    option (google.api.http) = {
+      post: "/v1/graph/edges"
+      body: "*"
+    };
+  }
+
+  // Traverse edges from a starting node.
+  rpc Traverse(TraverseRequest) returns (TraverseResponse) {
+    option (google.api.http) = {
+      post: "/v1/graph/traverse"
+      body: "*"
+    };
+  }
+}
+
+// A node in the property graph.
+message Node {
+  uint64 node_id = 1;
+  repeated string labels = 2;
+  map<string, coordinode.v1.common.PropertyValue> properties = 3;
+}
+
+// An edge in the property graph.
+message Edge {
+  uint64 edge_id = 1;
+  string edge_type = 2;
+  uint64 source_node_id = 3;
+  uint64 target_node_id = 4;
+  map<string, coordinode.v1.common.PropertyValue> properties = 5;
+}
+
+message CreateNodeRequest {
+  repeated string labels = 1;
+  map<string, coordinode.v1.common.PropertyValue> properties = 2;
+}
+
+message GetNodeRequest {
+  uint64 node_id = 1;
+}
+
+message CreateEdgeRequest {
+  string edge_type = 1;
+  uint64 source_node_id = 2;
+  uint64 target_node_id = 3;
+  map<string, coordinode.v1.common.PropertyValue> properties = 4;
+}
+
+message TraverseRequest {
+  uint64 start_node_id = 1;
+  string edge_type = 2;
+  // OUTBOUND, INBOUND, or BOTH.
+  TraversalDirection direction = 3;
+  uint32 max_depth = 4;
+  coordinode.v1.common.PaginationRequest pagination = 5;
+}
+
+enum TraversalDirection {
+  TRAVERSAL_DIRECTION_UNSPECIFIED = 0;
+  TRAVERSAL_DIRECTION_OUTBOUND = 1;
+  TRAVERSAL_DIRECTION_INBOUND = 2;
+  TRAVERSAL_DIRECTION_BOTH = 3;
+}
+
+message TraverseResponse {
+  repeated Node nodes = 1;
+  repeated Edge edges = 2;
+  coordinode.v1.common.PaginationResponse pagination = 3;
+}

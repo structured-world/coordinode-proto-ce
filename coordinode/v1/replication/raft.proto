@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package coordinode.v1.replication;
+
+// Raft consensus inter-node protocol (gRPC-only, no REST — internal).
+//
+// Uses opaque bytes for openraft type serialization (msgpack).
+// This decouples the proto schema from openraft's internal generic types,
+// making the protocol stable across openraft version upgrades.
+service RaftService {
+  // Leader election vote (unary).
+  // Payload: msgpack(VoteRequest) → msgpack(VoteResponse)
+  rpc Vote(RaftPayload) returns (RaftPayload);
+
+  // Log replication (unary, single batch).
+  // Used as fallback when streaming is not available.
+  // Payload: msgpack(AppendEntriesRequest) → msgpack(AppendEntriesResponse)
+  rpc AppendEntries(RaftPayload) returns (RaftPayload);
+
+  // Pipeline log replication (bidirectional streaming).
+  // Leader streams AppendEntriesRequest, follower streams StreamAppendResult.
+  // This is the primary replication path — higher throughput than unary.
+  rpc StreamAppend(stream RaftPayload) returns (stream RaftPayload);
+
+  // Snapshot transfer (client streaming).
+  // Leader streams snapshot chunks, follower responds with ack.
+  rpc Snapshot(stream RaftPayload) returns (RaftPayload);
+
+  // Leadership transfer (unary).
+  rpc TransferLeader(RaftPayload) returns (RaftEmpty);
+}
+
+// Opaque payload containing msgpack-serialized openraft types.
+message RaftPayload {
+  bytes data = 1;
+}
+
+// Empty response for fire-and-forget RPCs.
+message RaftEmpty {}

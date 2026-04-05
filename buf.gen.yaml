@@ -1,0 +1,18 @@
+version: v2
+managed:
+  enabled: true
+plugins:
+  # Rust (prost) — MUST be first, generates base .rs files
+  - remote: buf.build/community/neoeinstein-prost
+    out: gen/rust
+    opt:
+      - compile_well_known_types=true
+  # Rust (tonic) — uses insertion points into prost-generated files
+  - remote: buf.build/community/neoeinstein-tonic
+    out: gen/rust
+    opt:
+      - compile_well_known_types=true
+
+  # TypeScript (protobuf-ts) — for GUI (Vue 3 + Quasar)
+  - remote: buf.build/community/timostamm-protobuf-ts
+    out: gen/ts

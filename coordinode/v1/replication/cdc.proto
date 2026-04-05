@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package coordinode.v1.replication;
+
+// CE Change Data Capture: tail oplog segments via gRPC server-side streaming.
+//
+// Single-consumer per shard. Client reconnects with a ResumeToken to continue
+// from last acked position. At-least-once delivery.
+//
+// EE extensions (NATS/Kafka sinks, CEL pattern matching, cross-shard merge-sort,
+// exactly-once delivery, multiple concurrent consumers) are in R400.
+service ChangeStreamService {
+  // Open a long-lived server-side streaming RPC that tails oplog segments.
+  //
+  // The server streams ChangeEvent messages as new entries are sealed.
+  // When caught up, the server polls every ~100ms for new sealed segments.
+  // The stream stays open until the client cancels or the connection drops.
+  //
+  // On reconnect, pass the last received ResumeToken to resume without gaps.
+  // Omit resume_token (or set all fields to zero) to start from the oldest
+  // available segment.
+  rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
+}
+
+// Position within the oplog used to resume after disconnect.
+message ResumeToken {
+  // Shard this stream targets. Always 0 in CE single-shard mode.
+  uint32 shard_id = 1;
+
+  // Identifies the segment file: equals the `first_index` embedded in the
+  // filename (`oplog-<segment_id:020>.bin`). A value of 0 means "start of
+  // oldest available segment".
+  uint64 segment_id = 2;
+
+  // Number of entries from this segment already consumed.
+  // The next event delivered will be at offset `entry_offset` (0-based).
+  uint64 entry_offset = 3;
+}
+
+// Filters applied server-side before streaming events to the client.
+message CdcFilters {
+  // If non-empty, only deliver events that touch at least one adjacency or
+  // edge-property key whose edge type matches one of these strings.
+  // Example: ["FOLLOWS", "LIKES"]
+  // Leave empty to receive all edge types.
+  repeated string edge_types = 1;
+
+  // When set: only deliver events whose `is_migration` flag equals this value.
+  // When absent (HasField returns false): deliver both migration and non-migration events.
+  optional bool is_migration = 2;
+}
+
+message SubscribeRequest {
+  // Token from the last received ChangeEvent.position.
+  // Omit (all-zero) to start from the oldest available segment.
+  ResumeToken resume_token = 1;
+
+  // Optional filter to reduce bandwidth.
+  CdcFilters filters = 2;
+}
+
+// A single committed oplog entry delivered to the CDC consumer.
+message ChangeEvent {
+  // HLC timestamp of the entry (upper 46 bits = wall-clock ms, lower 18 = logical).
+  uint64 ts = 1;
+
+  // Raft term when this entry was proposed.
+  uint64 term = 2;
+
+  // Raft log index. Monotonically increasing per shard.
+  uint64 log_index = 3;
+
+  // Shard that produced this entry.
+  uint32 shard_id = 4;
+
+  // True if this entry was written during a shard migration (e.g. bulk data
+  // transfer). Most CDC consumers should skip migration entries.
+  bool is_migration = 5;
+
+  // The mutations carried by this log entry.
+  repeated ChangeOp ops = 6;
+
+  // Client should persist this token and pass it on reconnect.
+  ResumeToken position = 7;
+}
+
+// A single storage mutation within a ChangeEvent.
+message ChangeOp {
+  ChangeOpType type = 1;
+
+  // Storage partition (see coordinode_storage::engine::partition::Partition).
+  uint32 partition = 2;
+
+  // Storage key. Format depends on partition type.
+  bytes key = 3;
+
+  // Value bytes. Empty for DELETE ops.
+  bytes value = 4;
+}
+
+enum ChangeOpType {
+  CHANGE_OP_TYPE_UNSPECIFIED = 0;
+  INSERT = 1;
+  DELETE = 2;
+  MERGE = 3;
+  NOOP = 4;
+  RAFT_ENTRY = 5;
+  RAFT_TRUNCATION = 6;
+}

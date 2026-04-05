@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package coordinode.v1.graph;
+
+import "google/api/annotations.proto";
+
+// Schema management operations.
+service SchemaService {
+  // Create a new node label with property definitions.
+  rpc CreateLabel(CreateLabelRequest) returns (Label) {
+    option (google.api.http) = {
+      post: "/v1/graph/schema/labels"
+      body: "*"
+    };
+  }
+
+  // Create a new edge type with property definitions.
+  rpc CreateEdgeType(CreateEdgeTypeRequest) returns (EdgeType) {
+    option (google.api.http) = {
+      post: "/v1/graph/schema/edge-types"
+      body: "*"
+    };
+  }
+
+  // List all labels in the schema.
+  rpc ListLabels(ListLabelsRequest) returns (ListLabelsResponse) {
+    option (google.api.http) = {
+      get: "/v1/graph/schema/labels"
+    };
+  }
+
+  // List all edge types in the schema.
+  rpc ListEdgeTypes(ListEdgeTypesRequest) returns (ListEdgeTypesResponse) {
+    option (google.api.http) = {
+      get: "/v1/graph/schema/edge-types"
+    };
+  }
+}
+
+// A node label definition.
+message Label {
+  string name = 1;
+  repeated PropertyDefinition properties = 2;
+  uint64 version = 3;
+}
+
+// An edge type definition.
+message EdgeType {
+  string name = 1;
+  repeated PropertyDefinition properties = 2;
+  uint64 version = 3;
+}
+
+// A property definition within a label or edge type.
+message PropertyDefinition {
+  string name = 1;
+  PropertyType type = 2;
+  bool required = 3;
+  bool unique = 4;
+}
+
+enum PropertyType {
+  PROPERTY_TYPE_UNSPECIFIED = 0;
+  PROPERTY_TYPE_INT64 = 1;
+  PROPERTY_TYPE_FLOAT64 = 2;
+  PROPERTY_TYPE_STRING = 3;
+  PROPERTY_TYPE_BOOL = 4;
+  PROPERTY_TYPE_BYTES = 5;
+  PROPERTY_TYPE_TIMESTAMP = 6;
+  PROPERTY_TYPE_VECTOR = 7;
+  PROPERTY_TYPE_LIST = 8;
+  PROPERTY_TYPE_MAP = 9;
+}
+
+message CreateLabelRequest {
+  string name = 1;
+  repeated PropertyDefinition properties = 2;
+}
+
+message CreateEdgeTypeRequest {
+  string name = 1;
+  repeated PropertyDefinition properties = 2;
+}
+
+message ListLabelsRequest {}
+
+message ListLabelsResponse {
+  repeated Label labels = 1;
+}
+
+message ListEdgeTypesRequest {}
+
+message ListEdgeTypesResponse {
+  repeated EdgeType edge_types = 1;
+}

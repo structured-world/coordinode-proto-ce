@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package coordinode.v1.admin;
+
+import "google/api/annotations.proto";
+
+// Cluster management operations.
+service ClusterService {
+  // Get the current cluster status.
+  rpc GetClusterStatus(GetClusterStatusRequest) returns (ClusterStatus) {
+    option (google.api.http) = {
+      get: "/v1/admin/cluster/status"
+    };
+  }
+
+  // Add a node to the cluster.
+  rpc AddNode(AddNodeRequest) returns (ClusterNode) {
+    option (google.api.http) = {
+      post: "/v1/admin/cluster/nodes"
+      body: "*"
+    };
+  }
+
+  // Remove a node from the cluster.
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse) {
+    option (google.api.http) = {
+      delete: "/v1/admin/cluster/nodes/{node_id}"
+    };
+  }
+}
+
+message GetClusterStatusRequest {}
+
+message ClusterStatus {
+  repeated ClusterNode nodes = 1;
+  string leader_id = 2;
+  uint64 raft_term = 3;
+}
+
+message ClusterNode {
+  string node_id = 1;
+  string address = 2;
+  NodeRole role = 3;
+  NodeState state = 4;
+}
+
+enum NodeRole {
+  NODE_ROLE_UNSPECIFIED = 0;
+  NODE_ROLE_LEADER = 1;
+  NODE_ROLE_FOLLOWER = 2;
+  NODE_ROLE_LEARNER = 3;
+}
+
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  NODE_STATE_HEALTHY = 1;
+  NODE_STATE_DEGRADED = 2;
+  NODE_STATE_DOWN = 3;
+}
+
+message AddNodeRequest {
+  string address = 1;
+}
+
+message RemoveNodeRequest {
+  string node_id = 1;
+}
+
+message RemoveNodeResponse {}
