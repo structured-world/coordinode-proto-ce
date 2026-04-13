@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package coordinode.v1.query;
+
+import "google/api/annotations.proto";
+
+// Full-text search operations backed by tantivy (BM25 scoring, 30+ languages).
+service TextService {
+  // Search nodes matching a full-text query within a label.
+  //
+  // Searches all text-indexed properties for the label and returns BM25-scored
+  // results with optional HTML-highlighted snippets. If no text index is
+  // registered for the label, returns an empty result set (no error).
+  //
+  // Query syntax: boolean (AND, OR, NOT), phrase ("exact phrase"),
+  // prefix wildcard (term*), per-term boosting (term^N).
+  rpc TextSearch(TextSearchRequest) returns (TextSearchResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/text/search"
+      body: "*"
+    };
+  }
+}
+
+// Request to search indexed text properties across a node label.
+message TextSearchRequest {
+  // Label to search within (e.g., "Article", "Document"). Must have at least
+  // one text index registered; returns empty results otherwise.
+  string label = 1;
+
+  // Full-text query string. Supports boolean operators (AND, OR, NOT),
+  // phrase search ("exact phrase"), prefix wildcards (term*), and
+  // per-term boosting (term^N). Examples:
+  //   "rust AND graph"
+  //   "machine learning"
+  //   "data*"
+  //   "name^3 OR description^1"
+  string query = 2;
+
+  // Maximum number of results to return. 0 = default (10). Capped at 1000.
+  uint32 limit = 3;
+
+  // If true, enable Levenshtein-1 fuzzy matching for individual query terms.
+  // Increases recall at the cost of precision. Not applied to quoted phrases
+  // or terms that already contain operators.
+  bool fuzzy = 4;
+
+  // Language for query tokenization and stemming (e.g., "english", "russian",
+  // "chinese_jieba", "japanese_lindera", "none"). Empty string = use the
+  // index's default language (typically "english" unless overridden at index
+  // creation time).
+  string language = 5;
+}
+
+// Response containing BM25-scored text search results.
+message TextSearchResponse {
+  // Results ordered by BM25 score descending (most relevant first).
+  repeated TextResult results = 1;
+}
+
+// A single text search result with BM25 score and optional highlighted snippet.
+message TextResult {
+  // Node ID of the matching node.
+  uint64 node_id = 1;
+
+  // BM25 relevance score. Higher = more relevant to the query. Not normalized;
+  // values depend on corpus size and per-field weights.
+  float score = 2;
+
+  // HTML-tagged snippet of matching text with <b> tags around matched terms.
+  // Derived from the indexed field text using tantivy's SnippetGenerator.
+  // Empty when language-specific search is used (highlight requires default
+  // language tokenization) or when the indexed field has no stored content.
+  // Strip <b> and </b> tags for plain-text display.
+  string snippet = 3;
+}
