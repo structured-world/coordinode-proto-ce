@@ -113,6 +113,27 @@ message ComputedPropertyDefinition {
   string target_field = 12;
 }
 
+// Schema validation and flexibility mode for a node label.
+//
+// Controls how the write path handles properties at CREATE and SET time.
+// Applied per label via CreateLabelRequest.schema_mode.
+enum SchemaMode {
+  // Unspecified — defaults to STRICT on the server.
+  SCHEMA_MODE_UNSPECIFIED = 0;
+  // All properties must be declared in the schema. Undeclared properties are
+  // rejected at write time with a schema violation error. Full field-name
+  // interning is applied (up to 80% key storage reduction).
+  SCHEMA_MODE_STRICT = 1;
+  // Declared properties are type-checked and interned. Undeclared properties
+  // are accepted and stored in an overflow map (string keys, no interning).
+  // +10–20% storage overhead for undeclared properties.
+  SCHEMA_MODE_VALIDATED = 2;
+  // No schema enforcement. All properties stored with string keys (no
+  // interning). +80% storage overhead vs STRICT. Equivalent to the
+  // schema-free default behaviour on labels without a declared schema.
+  SCHEMA_MODE_FLEXIBLE = 3;
+}
+
 // Schema management operations.
 service SchemaService {
   // Create a new node label with property definitions.
@@ -155,6 +176,8 @@ message Label {
   uint64 version = 3;
   // COMPUTED property specifications declared for this label.
   repeated ComputedPropertyDefinition computed_properties = 4;
+  // Validation and interning mode for this label. STRICT by default.
+  SchemaMode schema_mode = 5;
 }
 
 // An edge type definition.
@@ -201,6 +224,10 @@ message CreateLabelRequest {
   // TTL specs automatically; DECAY and VECTOR_DECAY are evaluated at query time.
   // These are stored in the label schema and apply to all nodes of this label.
   repeated ComputedPropertyDefinition computed_properties = 3;
+  // Schema mode controlling validation and interning. Defaults to STRICT when
+  // unspecified. Use FLEXIBLE to replicate schema-free behaviour on a declared
+  // label; use VALIDATED to accept extra properties in an overflow map.
+  SchemaMode schema_mode = 4;
 }
 
 message CreateEdgeTypeRequest {
