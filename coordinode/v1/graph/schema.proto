@@ -4,6 +4,115 @@ package coordinode.v1.graph;
 
 import "google/api/annotations.proto";
 
+// The kind of COMPUTED property.
+enum ComputedType {
+  // Unspecified — invalid, rejected by server.
+  COMPUTED_TYPE_UNSPECIFIED = 0;
+  // Auto-delete node/property after duration_secs. Background TtlReaper
+  // scans all nodes of this label and deletes those whose anchor_field
+  // timestamp is older than duration_secs.
+  COMPUTED_TYPE_TTL = 1;
+  // Value interpolated between initial and target over duration_secs.
+  // Evaluated inline at query time: value = initial + (target - initial) × formula(elapsed).
+  COMPUTED_TYPE_DECAY = 2;
+  // Multiplier applied to vector similarity scores at query time.
+  // Evaluated as a float in [0, 1] that the planner multiplies with
+  // vector_similarity() results.
+  COMPUTED_TYPE_VECTOR_DECAY = 3;
+}
+
+// Decay formula variant for DECAY and VECTOR_DECAY computed types.
+// All formulas map normalized time t ∈ [0, 1] to weight ∈ [0, 1].
+enum DecayFormulaType {
+  DECAY_FORMULA_TYPE_UNSPECIFIED = 0;
+  // f(t) = max(0, 1 - t). Constant rate, hard cutoff at duration.
+  DECAY_FORMULA_TYPE_LINEAR = 1;
+  // f(t) = e^(-λt). Exponential decay. Requires lambda field.
+  // λ = ln(2) / half_life_fraction; pre-computed by client from desired half-life.
+  DECAY_FORMULA_TYPE_EXPONENTIAL = 2;
+  // f(t) = (1 + t/τ)^(-α). Fat-tail decay. Requires tau and alpha fields.
+  // Recent items decay fast; residual value persists longer than exponential.
+  DECAY_FORMULA_TYPE_POWER_LAW = 3;
+  // f(t) = 1 if t < 1, else 0. Binary step: full value until duration, then zero.
+  // Semantically equivalent to TTL but evaluated at query time (no background delete).
+  DECAY_FORMULA_TYPE_STEP = 4;
+}
+
+// What to delete when a TTL COMPUTED property expires.
+enum TtlScopeType {
+  TTL_SCOPE_TYPE_UNSPECIFIED = 0;
+  // Delete only the anchor_field property from the node. Node remains alive.
+  TTL_SCOPE_TYPE_FIELD = 1;
+  // Delete the target_field DOCUMENT property. The anchor_field timestamp
+  // remains intact; only the nested document content is removed. Requires
+  // target_field to be set in ComputedPropertyDefinition.
+  TTL_SCOPE_TYPE_SUBTREE = 2;
+  // Delete the entire node and all its outgoing/incoming edges (DETACH DELETE).
+  TTL_SCOPE_TYPE_NODE = 3;
+}
+
+// A COMPUTED property specification within a CreateLabelRequest.
+//
+// COMPUTED properties are evaluated at query time from node data — no value
+// is stored per node. The spec is stored once in the label schema and applied
+// to all nodes of that label during MATCH/RETURN execution.
+//
+// Three types:
+//   TTL         — background auto-delete after duration_secs
+//   DECAY       — float value interpolated between initial and target over time
+//   VECTOR_DECAY — query-time multiplier on vector similarity scores
+message ComputedPropertyDefinition {
+  // Property name. Must not collide with regular PropertyDefinition names
+  // in the same label. Convention: prefix TTL properties with underscore
+  // (e.g., "_ttl", "_expires").
+  string name = 1;
+
+  // Kind of computed property. Required.
+  ComputedType computed_type = 2;
+
+  // Decay formula variant. Required for DECAY and VECTOR_DECAY types.
+  // Ignored for TTL type.
+  DecayFormulaType formula_type = 3;
+
+  // For EXPONENTIAL formula: pre-computed λ = ln(2) / half_life_fraction.
+  // Example: half-life at 50% of duration → lambda = ln(2) / 0.5 ≈ 1.386.
+  double lambda = 4;
+
+  // For POWER_LAW formula: time scale as fraction of duration (τ > 0).
+  // Controls how fast the initial decay is. Smaller τ → faster initial drop.
+  double tau = 5;
+
+  // For POWER_LAW formula: decay exponent (α > 0).
+  // Larger α → faster decay overall.
+  double alpha = 6;
+
+  // Starting value at elapsed = 0 (for DECAY type only).
+  // Default: 1.0 (full strength at creation).
+  double initial = 7;
+
+  // Target value at elapsed ≥ duration_secs (for DECAY type only).
+  // Default: 0.0 (fully decayed at end of duration).
+  double target = 8;
+
+  // Duration in seconds: decay occurs over [0, duration_secs]; TTL expires after this.
+  // Required for all computed types.
+  uint64 duration_secs = 9;
+
+  // Name of the TIMESTAMP property to measure elapsed time from.
+  // Must be declared as a regular TIMESTAMP property in the same CreateLabelRequest.
+  // Example: "created_at", "indexed_at", "expires_at".
+  string anchor_field = 10;
+
+  // What to delete when a TTL expires (for TTL type only).
+  // Default (UNSPECIFIED): treated as TTL_SCOPE_TYPE_NODE — delete the whole node.
+  TtlScopeType scope = 11;
+
+  // For TTL_SCOPE_TYPE_SUBTREE: the DOCUMENT property to delete on expiry.
+  // The anchor_field timestamp is preserved; only this DOCUMENT property is removed.
+  // Leave empty if scope is FIELD or NODE (ignored in those cases).
+  string target_field = 12;
+}
+
 // Schema management operations.
 service SchemaService {
   // Create a new node label with property definitions.
@@ -37,11 +146,15 @@ service SchemaService {
   }
 }
 
-// A node label definition.
+// A node label definition returned by CreateLabel and ListLabels.
 message Label {
   string name = 1;
+  // Regular (non-computed) property definitions.
   repeated PropertyDefinition properties = 2;
+  // Schema version, incremented on each change.
   uint64 version = 3;
+  // COMPUTED property specifications declared for this label.
+  repeated ComputedPropertyDefinition computed_properties = 4;
 }
 
 // An edge type definition.
@@ -53,9 +166,16 @@ message EdgeType {
 
 // A property definition within a label or edge type.
 message PropertyDefinition {
+  // Property name.
   string name = 1;
+  // Declared type. COMPUTED properties are represented separately via
+  // ComputedPropertyDefinition; use PropertyType for regular properties only.
   PropertyType type = 2;
+  // Whether this property is required (NOT NULL). Writes missing this property
+  // are rejected in STRICT and VALIDATED schema modes.
   bool required = 3;
+  // Whether a UNIQUE B-tree index is maintained for this property.
+  // Duplicate values across nodes of this label are rejected.
   bool unique = 4;
 }
 
@@ -73,8 +193,14 @@ enum PropertyType {
 }
 
 message CreateLabelRequest {
+  // Label name (e.g., "User", "Movie", "Memory").
   string name = 1;
+  // Regular property declarations. Defines types, constraints (unique, required).
   repeated PropertyDefinition properties = 2;
+  // COMPUTED property specifications. The TtlReaper background worker picks up
+  // TTL specs automatically; DECAY and VECTOR_DECAY are evaluated at query time.
+  // These are stored in the label schema and apply to all nodes of this label.
+  repeated ComputedPropertyDefinition computed_properties = 3;
 }
 
 message CreateEdgeTypeRequest {
