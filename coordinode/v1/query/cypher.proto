@@ -3,6 +3,7 @@ syntax = "proto3";
 package coordinode.v1.query;
 
 import "coordinode/v1/common/types.proto";
+import "coordinode/v1/replication/consistency.proto";
 import "google/api/annotations.proto";
 
 // OpenCypher-compatible query execution service.
@@ -25,8 +26,22 @@ service CypherService {
 }
 
 message ExecuteCypherRequest {
+  // OpenCypher query string.
   string query = 1;
+
+  // Named query parameters bound at execution time.
   map<string, coordinode.v1.common.PropertyValue> parameters = 2;
+
+  // Which cluster node may serve this read.
+  // UNSPECIFIED defaults to PRIMARY (leader-only reads).
+  // Use SECONDARY_PREFERRED for read scale-out in 3-node CE cluster.
+  coordinode.v1.replication.ReadPreference read_preference = 3;
+
+  // Data consistency guarantee for this read.
+  // UNSPECIFIED defaults to LOCAL (return whatever this node has applied).
+  // Use MAJORITY for reads that must not see rolled-back data.
+  // Use LINEARIZABLE for strictest freshness (leader only, adds ~1 RTT).
+  coordinode.v1.replication.ReadConcern read_concern = 4;
 }
 
 message ExecuteCypherResponse {
@@ -46,6 +61,15 @@ message QueryStats {
   int64 edges_deleted = 4;
   int64 properties_set = 5;
   int64 execution_time_ms = 6;
+
+  // Raft log index applied on the serving node at query time.
+  // Clients use this as `after_index` in subsequent causal reads (R142).
+  // 0 means the node is not part of a Raft cluster (embedded mode).
+  uint64 applied_index = 7;
+
+  // True when the read was served by the Raft leader.
+  // False for follower reads (read_preference = SECONDARY or NEAREST).
+  bool served_by_leader = 8;
 }
 
 message ExplainCypherRequest {
