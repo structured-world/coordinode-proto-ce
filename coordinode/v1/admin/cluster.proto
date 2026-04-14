@@ -13,7 +13,35 @@ service ClusterService {
     };
   }
 
-  // Add a node to the cluster.
+  // Initiate a cluster join lifecycle for a new node.
+  //
+  // Adds the target node as a Learner (non-voting) and starts a background
+  // monitor that promotes it to Voter once replication lag drops below
+  // READINESS_LAG_THRESHOLD (1000 entries). Must be called on the leader.
+  //
+  // Returns immediately after the Learner is added. Use JoinProgress to
+  // stream phase events until COMPLETE or FAILED.
+  rpc JoinNode(JoinNodeRequest) returns (JoinNodeResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/cluster/join"
+      body: "*"
+    };
+  }
+
+  // Stream join progress events for a node join in progress.
+  //
+  // Returns a server-streaming response of JoinStatus messages until
+  // the join reaches COMPLETE or FAILED phase. The stream closes automatically
+  // after either terminal phase is emitted.
+  //
+  // Returns NOT_FOUND if JoinNode was not called for this node_id or if
+  // the join has already completed.
+  rpc JoinProgress(JoinProgressRequest) returns (stream JoinStatus) {}
+
+  // Add a node to the cluster (low-level, auto-assigned ID).
+  //
+  // Deprecated: use JoinNode with an explicit node_id and address instead.
+  // This RPC is retained for API compatibility but returns UNIMPLEMENTED.
   rpc AddNode(AddNodeRequest) returns (ClusterNode) {
     option (google.api.http) = {
       post: "/v1/admin/cluster/nodes"
@@ -33,29 +61,102 @@ message GetClusterStatusRequest {}
 
 message ClusterStatus {
   repeated ClusterNode nodes = 1;
+  // Node ID of the current Raft leader. Empty string if no leader elected.
   string leader_id = 2;
+  // Current Raft term. Monotonically increasing across leader elections.
   uint64 raft_term = 3;
 }
 
 message ClusterNode {
+  // Numeric node ID as string (matches --id flag in CLI).
   string node_id = 1;
+  // gRPC address of the node (host:port). May be empty for follower self-report.
   string address = 2;
   NodeRole role = 3;
   NodeState state = 4;
+  // Number of Raft log entries this node is behind the leader.
+  // Zero for the leader itself. Used for read routing staleness checks.
+  uint64 lag_entries = 5;
 }
 
 enum NodeRole {
   NODE_ROLE_UNSPECIFIED = 0;
+  // Leader — handles all writes and coordinates replication.
   NODE_ROLE_LEADER = 1;
+  // Voting follower — participates in elections and quorum.
   NODE_ROLE_FOLLOWER = 2;
+  // Non-voting learner — receives replication but does not vote.
   NODE_ROLE_LEARNER = 3;
 }
 
 enum NodeState {
   NODE_STATE_UNSPECIFIED = 0;
+  // Healthy — lag within acceptable threshold.
   NODE_STATE_HEALTHY = 1;
+  // Degraded — lag exceeds threshold or heartbeat delayed.
   NODE_STATE_DEGRADED = 2;
+  // Down — not reachable or no heartbeat received.
   NODE_STATE_DOWN = 3;
+}
+
+// Request to initiate a cluster join for a new node.
+message JoinNodeRequest {
+  // Numeric node ID to assign. Must be unique across the cluster.
+  // The target node must already be running and listening on address.
+  uint64 node_id = 1;
+  // gRPC address of the new node in "host:port" format.
+  // The leader will replicate log entries to this address.
+  string address = 2;
+  // If true, the new node has pre-seeded data from an offline snapshot backup.
+  // Used as a hint: the leader logs "Tier 3 skip expected" in the initial
+  // progress event. Actual Tier-3 skip behavior runs on the joining node side.
+  bool pre_seeded = 3;
+}
+
+// Response to JoinNode — the join lifecycle has been initiated.
+message JoinNodeResponse {
+  // Numeric node ID of the joining node (echoed from request).
+  uint64 node_id = 1;
+  // Human-readable status. Currently always "JOIN_INITIATED".
+  string status = 2;
+}
+
+// Request to subscribe to join progress events.
+message JoinProgressRequest {
+  // Node ID whose join lifecycle to observe (must match a JoinNode call).
+  uint64 node_id = 1;
+}
+
+// A single join progress event, emitted during the join lifecycle.
+//
+// The stream emits events at each phase transition and every ~500ms lag poll.
+// The stream closes after COMPLETE or FAILED is emitted.
+message JoinStatus {
+  // Node ID of the joining node.
+  uint64 node_id = 1;
+  // Current join phase.
+  JoinPhase phase = 2;
+  // Number of Raft log entries behind the leader. Zero when unknown or complete.
+  uint64 lag_entries = 3;
+  // Estimated completion percentage (0–100). 100 means complete.
+  uint32 percent = 4;
+  // Human-readable status message for display in CLI --follow output.
+  string message = 5;
+}
+
+// Phase progression for a node join lifecycle.
+enum JoinPhase {
+  JOIN_PHASE_UNSPECIFIED = 0;
+  // Node added as Learner — receiving log replication, replication lag closing.
+  JOIN_PHASE_LEARNER = 1;
+  // Lag below threshold (1000 entries) — promoting to Voter imminently.
+  JOIN_PHASE_READY_CHECK = 2;
+  // change_membership in progress — node becoming a Voter.
+  JOIN_PHASE_PROMOTING = 3;
+  // Node is now a Voter. Join complete. Stream closes after this event.
+  JOIN_PHASE_COMPLETE = 4;
+  // Join failed (see message). Stream closes after this event.
+  JOIN_PHASE_FAILED = 5;
 }
 
 message AddNodeRequest {
