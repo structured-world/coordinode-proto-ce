@@ -55,6 +55,31 @@ service ClusterService {
       delete: "/v1/admin/cluster/nodes/{node_id}"
     };
   }
+
+  // Gracefully decommission a node from the cluster.
+  //
+  // Implements the Phase 0-2 decommission protocol:
+  //   Phase 0: Quorum gate — verify removing node_id still leaves ≥ 2 voters.
+  //            Aborts with FAILED_PRECONDITION if quorum would be lost.
+  //   Phase 1: Leadership transfer — if node_id is the current Raft leader,
+  //            leadership is transferred to a peer before removal.
+  //            For self-decommission (leader removing itself), the request is
+  //            internally forwarded to the new leader after transfer.
+  //   Phase 2: Membership remove — change_membership(remove: node_id).
+  //            Node stops receiving log replication and is removed from quorum.
+  //
+  // CE behaviour: single Raft group, all nodes hold full data. Pruning (Phase 3)
+  // is advisory — operator must delete data on the decommissioned node manually.
+  //
+  // Must be called on the current Raft leader, or on the node being decommissioned
+  // when that node is the leader (self-decommission path).
+  // Use force=true for emergency removal of an unreachable node (may lose data).
+  rpc DecommissionNode(DecommissionNodeRequest) returns (DecommissionNodeResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/cluster/decommission"
+      body: "*"
+    };
+  }
 }
 
 message GetClusterStatusRequest {}
@@ -168,3 +193,41 @@ message RemoveNodeRequest {
 }
 
 message RemoveNodeResponse {}
+
+// Request to gracefully decommission a node from the cluster.
+message DecommissionNodeRequest {
+  // Numeric node ID to decommission. Must be in the current voter set.
+  // The node will be removed from Raft membership after quorum and drain checks pass.
+  uint64 node_id = 1;
+
+  // If true, the decommissioned node's data should be wiped after removal.
+  // In CE, this is advisory — operator must delete data on node_id manually.
+  // The response will set operator_cleanup_required=true as a reminder.
+  // In EE, storage is freed progressively as each shard move completes (Phase 1).
+  bool pruning = 2;
+
+  // Emergency decommission: skip quorum gate and drain, force membership remove
+  // even if node_id is unreachable. May cause permanent data loss if node_id
+  // held the only copy of any shard.
+  // Requires skip_confirmation=true to guard against accidental invocation.
+  bool force = 3;
+
+  // Must be set to true when force=true to confirm awareness of potential data loss.
+  // Prevents accidental use of --force without understanding the consequences.
+  // Ignored when force=false.
+  bool skip_confirmation = 4;
+}
+
+// Response from DecommissionNode.
+message DecommissionNodeResponse {
+  // Numeric node ID that was decommissioned.
+  uint64 node_id = 1;
+
+  // Human-readable status message describing the phases executed.
+  string message = 2;
+
+  // Set when pruning=true was requested.
+  // In CE, operator must manually delete data on the decommissioned node.
+  // In EE, storage is freed automatically during Phase 1 shard moves.
+  bool operator_cleanup_required = 3;
+}
