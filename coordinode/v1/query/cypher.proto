@@ -42,6 +42,20 @@ message ExecuteCypherRequest {
   // Use MAJORITY for reads that must not see rolled-back data.
   // Use LINEARIZABLE for strictest freshness (leader only, adds ~1 RTT).
   coordinode.v1.replication.ReadConcern read_concern = 4;
+
+  // Durability guarantee for write statements (CREATE / MERGE / SET / DELETE).
+  //
+  // UNSPECIFIED / omitted defaults to W1 (leader-acknowledged, not replicated).
+  // Use MAJORITY for production writes that must survive a single node failure.
+  //
+  // Causal sessions (read_concern.after_index > 0) require write_concern.level
+  // >= MAJORITY. The server rejects writes with lower durability in causal
+  // sessions because a non-majority write may never be replicated: if the leader
+  // crashes before drain, the returned applied_index becomes a dangling causal
+  // dependency that can never be satisfied by a follower read.
+  //
+  // Read-only queries ignore this field.
+  coordinode.v1.replication.WriteConcern write_concern = 5;
 }
 
 message ExecuteCypherResponse {
