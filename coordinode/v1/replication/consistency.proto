@@ -37,7 +37,23 @@ enum ReadConcernLevel {
 
 // Read concern configuration.
 message ReadConcern {
+  // Consistency level for this read. UNSPECIFIED defaults to LOCAL.
   ReadConcernLevel level = 1;
+
+  // Causal fence: wait until the serving node has applied log entries up to
+  // at least this Raft log index before executing the read.
+  //
+  // Set to the `QueryStats.applied_index` value from a prior write response
+  // to guarantee read-your-writes: the read is guaranteed to observe all
+  // mutations up to and including that write.
+  //
+  // 0 = no fence (default). Only valid with level = MAJORITY or SNAPSHOT;
+  // returns FAILED_PRECONDITION if level = LOCAL or LINEARIZABLE.
+  //
+  // Has no effect in standalone (non-Raft) mode — all writes are immediately
+  // visible. The returned applied_index will always be 0 in standalone mode,
+  // so clients should not set after_index unless operating in cluster mode.
+  uint64 after_index = 2;
 }
 
 // Read preference for routing read operations.
