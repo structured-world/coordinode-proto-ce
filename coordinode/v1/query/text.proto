@@ -20,21 +20,6 @@ service TextService {
       body: "*"
     };
   }
-
-  // Fuse BM25 text search and cosine vector search using Reciprocal Rank Fusion (RRF).
-  //
-  // Runs text and vector searches independently, then combines the ranked lists:
-  //   rrf_score(node) = text_weight / (60 + rank_text) + vector_weight / (60 + rank_vec)
-  //
-  // Nodes appearing in both rankings score higher than those in only one.
-  // If no text index exists for the label, text_weight contributes nothing.
-  // Returns results ordered by RRF score descending.
-  rpc HybridTextVectorSearch(HybridTextVectorSearchRequest) returns (HybridTextVectorSearchResponse) {
-    option (google.api.http) = {
-      post: "/v1/query/text/hybrid"
-      body: "*"
-    };
-  }
 }
 
 // Request to search indexed text properties across a node label.
@@ -90,60 +75,3 @@ message TextResult {
   string snippet = 3;
 }
 
-// Request for server-side hybrid text + vector search with RRF ranking.
-//
-// Fuses two independent ranked lists via Reciprocal Rank Fusion:
-//   rrf_score(node) = text_weight / (60 + rank_text) + vector_weight / (60 + rank_vec)
-//
-// Standard RRF constant k=60 ensures robustness against score distribution
-// differences between BM25 and cosine similarity.
-message HybridTextVectorSearchRequest {
-  // Label to search within (e.g., "Article", "Document"). Must have at least
-  // one text index registered; if none, the text ranking is empty and only
-  // vector results contribute.
-  string label = 1;
-
-  // Full-text query string. Supports the same syntax as TextSearchRequest.query —
-  // boolean operators (AND, OR, NOT), phrase search ("..."), prefix wildcards
-  // (term*), and per-term boosting (term^N).
-  string text_query = 2;
-
-  // Query embedding vector for the vector search component. Must match the
-  // dimensionality of vectors stored in vector_property on the target nodes.
-  repeated float vector = 3;
-
-  // Maximum number of fused results to return. 0 = default (10). Capped at 1000.
-  uint32 limit = 4;
-
-  // Weight applied to the text (BM25) component in the RRF formula.
-  // Effective range: (0, ∞). 0.0 = use default (0.5). Equal weights = standard RRF.
-  // Higher text_weight biases ranking toward text relevance.
-  float text_weight = 5;
-
-  // Weight applied to the vector (cosine) component in the RRF formula.
-  // Effective range: (0, ∞). 0.0 = use default (0.5). Equal weights = standard RRF.
-  // Higher vector_weight biases ranking toward semantic similarity.
-  float vector_weight = 6;
-
-  // Name of the node property containing the embedding vectors.
-  // Empty = default "embedding". Must match the property used at ingest time.
-  string vector_property = 7;
-}
-
-// Response containing RRF-ranked hybrid search results.
-message HybridTextVectorSearchResponse {
-  // Results ordered by RRF score descending (most relevant first).
-  repeated HybridResult results = 1;
-}
-
-// A single hybrid search result with the combined RRF score.
-message HybridResult {
-  // Node ID of the matching node.
-  uint64 node_id = 1;
-
-  // Combined RRF score: text_weight/(60+rank_text) + vector_weight/(60+rank_vec).
-  // Higher = more relevant. A node in rank 1 of both lists with default weights
-  // scores 2 × (0.5/(60+1)) ≈ 0.0164. Useful for relative ordering within a
-  // result set; not comparable across queries or weight configurations.
-  float score = 2;
-}
