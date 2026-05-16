@@ -3,14 +3,32 @@ syntax = "proto3";
 package coordinode.v1.replication;
 
 // Write concern levels.
+// Write durability levels, ordered W0 < MEMORY < CACHE < W1 < MAJORITY.
+//
+// Selecting a level below W1 trades durability for latency: MEMORY and CACHE
+// acknowledge the client before the write is replicated through Raft, with
+// the drain thread batching them into proposals asynchronously. A leader
+// crash before drain loses every in-flight MEMORY/CACHE write. Use only
+// for telemetry, hot counters, session state — never for source-of-truth
+// data.
 enum WriteConcernLevel {
   WRITE_CONCERN_LEVEL_UNSPECIFIED = 0;
-  // Fire-and-forget (no acknowledgement).
+  // Fire-and-forget (no acknowledgement). Data may be lost immediately —
+  // use only for non-critical metrics.
   WRITE_CONCERN_LEVEL_W0 = 1;
-  // Acknowledged by leader only.
+  // Acknowledged by leader only (leader WAL fsync). Default in standalone
+  // mode and the lowest level safe to default for typical applications.
   WRITE_CONCERN_LEVEL_W1 = 2;
-  // Acknowledged by majority of replicas.
+  // Acknowledged by majority of replicas (Raft quorum). Strongest durability
+  // before Linearizable read concerns; safe under single-node failure.
   WRITE_CONCERN_LEVEL_MAJORITY = 3;
+  // Acknowledged after RAM-only write (~1µs ACK). Visible immediately to
+  // local readers; background drain to Raft batches them into proposals.
+  // Lost on process crash before drain.
+  WRITE_CONCERN_LEVEL_MEMORY = 4;
+  // Acknowledged after RAM + NVMe cache write (~100µs ACK). Survives process
+  // crash but not power failure before drain. Background drain to Raft.
+  WRITE_CONCERN_LEVEL_CACHE = 5;
 }
 
 // Write concern configuration.
