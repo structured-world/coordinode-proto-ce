@@ -54,6 +54,22 @@ message ReadConcern {
   // visible. The returned applied_index will always be 0 in standalone mode,
   // so clients should not set after_index unless operating in cluster mode.
   uint64 after_index = 2;
+
+  // Snapshot pin: read the database as of this HLC timestamp (microseconds
+  // since Unix epoch, leader-assigned).
+  //
+  // Only valid with level = SNAPSHOT. Setting this with any other level
+  // returns FAILED_PRECONDITION. 0 = no pin (latest snapshot of the chosen
+  // level applies).
+  //
+  // Typical use: time-travel reads ("what did this query return at 2026-05-15
+  // 12:00:00?"). The timestamp must be within the MVCC retention window —
+  // older snapshots are GC'd. Reads beyond retention return UNAVAILABLE.
+  //
+  // Distinct from `after_index`: `after_index` is a *fence* (wait until at
+  // least this index is applied), `at_timestamp` is a *pin* (read exactly
+  // this version, no waiting).
+  uint64 at_timestamp = 3;
 }
 
 // Read preference for routing read operations.
