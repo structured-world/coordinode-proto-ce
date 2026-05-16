@@ -42,9 +42,15 @@ service GraphService {
 
 // A node in the property graph.
 message Node {
+  // Raw 64-bit node identifier. Preserved for Neo4j v4 driver compatibility
+  // and direct internal addressing. New client code SHOULD prefer `element_id`.
   uint64 node_id = 1;
   repeated string labels = 2;
   map<string, coordinode.v1.common.PropertyValue> properties = 3;
+  // Canonical opaque identifier: 13-character Crockford base32 encoding of
+  // `node_id` (bijective). Stable across schema changes, restarts, replication.
+  // Use this as the primary node reference in application code per ADR-022.
+  string element_id = 4;
 }
 
 // An edge in the property graph.
@@ -54,6 +60,11 @@ message Edge {
   uint64 source_node_id = 3;
   uint64 target_node_id = 4;
   map<string, coordinode.v1.common.PropertyValue> properties = 5;
+  // Canonical opaque identifier for the edge endpoints (concatenated source
+  // and target `element_id`s in canonical order). Edges in CoordiNode are
+  // typed property bags between two nodes, not first-class entities — this
+  // field exists for parity with Neo4j relationships, not as a stable handle.
+  string element_id = 6;
 }
 
 message CreateNodeRequest {
