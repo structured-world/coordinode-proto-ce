@@ -172,8 +172,11 @@ message Label {
   string name = 1;
   // Regular (non-computed) property definitions.
   repeated PropertyDefinition properties = 2;
-  // Schema version, incremented on each change.
-  uint64 version = 3;
+  // Schema revision (DDL snapshot identity). Advances on ALTER operations
+  // that change write-path semantics (placement, shard_keys, mode). Distinct
+  // from data-side versioning (MVCC commit_ts, future per-row OCC `_v`) —
+  // "revision" is reserved for DDL identity per ADR-023.
+  uint64 schema_revision = 3;
   // COMPUTED property specifications declared for this label.
   repeated ComputedPropertyDefinition computed_properties = 4;
   // Validation and interning mode for this label. STRICT by default.
@@ -184,7 +187,8 @@ message Label {
 message EdgeType {
   string name = 1;
   repeated PropertyDefinition properties = 2;
-  uint64 version = 3;
+  // Schema revision (DDL snapshot identity). See `Label.schema_revision`.
+  uint64 schema_revision = 3;
 }
 
 // A property definition within a label or edge type.
