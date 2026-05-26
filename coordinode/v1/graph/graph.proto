@@ -16,6 +16,19 @@ service GraphService {
     };
   }
 
+  // Create N nodes in a single transaction. Server batches secondary
+  // index updates (HNSW graph builds, full-text posting list appends,
+  // B-tree entries) so a bulk load of M nodes carrying vector or
+  // text properties costs one index write per index, not M. The
+  // whole batch is atomic: either every node is created or none are.
+  // Created nodes are returned in input order.
+  rpc CreateNodesBatch(CreateNodesBatchRequest) returns (CreateNodesBatchResponse) {
+    option (google.api.http) = {
+      post: "/v1/graph/nodes:batch"
+      body: "*"
+    };
+  }
+
   // Get a node by its ID.
   rpc GetNode(GetNodeRequest) returns (Node) {
     option (google.api.http) = {
@@ -70,6 +83,25 @@ message Edge {
 message CreateNodeRequest {
   repeated string labels = 1;
   map<string, coordinode.v1.common.PropertyValue> properties = 2;
+}
+
+// Bulk-create N nodes in one transaction. Same shape as N back-to-back
+// CreateNode calls, but processed under a single server-side lock
+// acquisition with deferred secondary-index commit at the end of the
+// batch — primary win for vector-heavy bulk loads (HNSW write lock is
+// taken once per batch, not once per node).
+message CreateNodesBatchRequest {
+  // Nodes to create, in caller-defined order. Each entry has the same
+  // semantics as a single CreateNodeRequest. Server returns the created
+  // nodes in the same order via CreateNodesBatchResponse.nodes.
+  // An empty list is a valid no-op and returns an empty response.
+  repeated CreateNodeRequest nodes = 1;
+}
+
+message CreateNodesBatchResponse {
+  // Created nodes, in the same order as CreateNodesBatchRequest.nodes.
+  // Length matches the request's `nodes` length on success.
+  repeated Node nodes = 1;
 }
 
 message GetNodeRequest {
