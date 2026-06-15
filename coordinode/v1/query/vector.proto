@@ -48,13 +48,13 @@ enum DistanceMetric {
 
 message VectorSearchResponse {
   repeated VectorResult results = 1;
-  // Lifecycle + freshness of the HNSW index that served this query. Set
-  // server-side from the index registry's health signal. Absent (field unset)
-  // when the query did not run against a managed HNSW index (for example a
-  // brute-force fallback on a tiny dataset). A client implements
-  // read-your-writes by comparing `index_state.indexed_hlc` against the HLC
+  // Serving health + freshness of the HNSW index that answered this query.
+  // Set server-side from the index registry's health signal. Absent (field
+  // unset) when the query did not run against a managed HNSW index (for
+  // example a brute-force fallback on a tiny dataset). A client implements
+  // read-your-writes by comparing `index_health.indexed_hlc` against the HLC
   // of its own prior write (the Pinecone LSN-header pattern).
-  VectorIndexState index_state = 2;
+  VectorIndexHealth index_health = 2;
 }
 
 message VectorResult {
@@ -62,38 +62,41 @@ message VectorResult {
   float distance = 2;
 }
 
-// Lifecycle state and freshness watermark of a vector index. Computed
-// server-side; clients never send this. Surfaced so callers can distinguish a
-// fully-built index from one being rebuilt after segment migration, and can
-// gauge how far the local replica has caught up with committed writes.
-message VectorIndexState {
-  // Lifecycle state of the index at the time it served the query.
-  enum State {
+// Serving health of a vector index: whether it can answer queries at full
+// recall right now, plus the freshness watermark of writes it has applied.
+// Computed server-side; clients never send this. This is the live *serving*
+// lifecycle (ready / rebuilding / offline), distinct from the durable backfill
+// state persisted with the index definition.
+message VectorIndexHealth {
+  // Serving lifecycle of the index at the time it answered the query — can it
+  // serve at full recall now? Distinct from the durable backfill state.
+  enum ServingState {
     // Unset / unknown — treat as a degenerate case, not a guarantee.
-    STATE_UNSPECIFIED = 0;
+    SERVING_STATE_UNSPECIFIED = 0;
     // Fully built and serving at the documented recall.
-    STATE_READY = 1;
+    SERVING_STATE_READY = 1;
     // Being (re)built after segment migration or reconfiguration; results may
     // be partial-recall depending on the label's VECTOR_REBUILD_POLICY.
-    STATE_REBUILDING = 2;
+    SERVING_STATE_REBUILDING = 2;
     // Unavailable; see `offline_reason`.
-    STATE_OFFLINE = 3;
+    SERVING_STATE_OFFLINE = 3;
   }
-  // Current lifecycle state.
-  State state = 1;
-  // Rebuild progress in [0.0, 1.0]. 0 unless `state == INDEX_STATE_REBUILDING`.
-  float progress = 2;
+  // Current serving lifecycle.
+  ServingState serving_state = 1;
+  // Rebuild progress in [0.0, 1.0]. 0 unless `serving_state ==
+  // SERVING_STATE_REBUILDING`.
+  float rebuild_progress = 2;
   // Best-effort estimate of remaining rebuild time, in milliseconds. 0 unless
-  // `state == INDEX_STATE_REBUILDING`.
+  // `serving_state == SERVING_STATE_REBUILDING`.
   uint64 eta_ms = 3;
   // Freshness watermark: the HLC commit timestamp (wall-clock microseconds,
   // ADR-007) of the last write the local index-maintenance worker has applied.
   // This is the read-your-writes fence — a client that wrote at HLC W has been
   // served a fully-current index iff `indexed_hlc >= W`. 0 when nothing has
-  // been applied yet or `state == INDEX_STATE_OFFLINE`.
+  // been applied yet or `serving_state == SERVING_STATE_OFFLINE`.
   uint64 indexed_hlc = 4;
-  // Human-readable reason when `state == INDEX_STATE_OFFLINE` (for example
-  // "segment_lost", "disk_io", "manual_disable"); empty otherwise.
+  // Human-readable reason when `serving_state == SERVING_STATE_OFFLINE` (for
+  // example "segment_lost", "disk_io", "manual_disable"); empty otherwise.
   string offline_reason = 5;
 }
 
@@ -113,8 +116,9 @@ message HybridSearchRequest {
 
 message HybridSearchResponse {
   repeated VectorResult results = 1;
-  // Lifecycle + freshness of the HNSW index that served the vector phase of
-  // this hybrid query. Same semantics as `VectorSearchResponse.index_state`;
-  // unset when the vector phase did not run against a managed HNSW index.
-  VectorIndexState index_state = 2;
+  // Serving health + freshness of the HNSW index that answered the vector
+  // phase of this hybrid query. Same semantics as
+  // `VectorSearchResponse.index_health`; unset when the vector phase did not
+  // run against a managed HNSW index.
+  VectorIndexHealth index_health = 2;
 }
