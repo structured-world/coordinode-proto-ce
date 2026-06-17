@@ -23,6 +23,34 @@ service CypherService {
       body: "*"
     };
   }
+
+  // Begin an interactive multi-statement transaction. Returns a
+  // transaction_id; pass it on ExecuteCypherRequest for each statement, then
+  // CommitTransaction or RollbackTransaction. All statements read the same
+  // pinned snapshot (repeatable read) and writes commit atomically at commit.
+  rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/transaction/begin"
+      body: "*"
+    };
+  }
+
+  // Commit an interactive transaction: validate the read-set, then persist
+  // every buffered statement's writes in a single proposal.
+  rpc CommitTransaction(CommitTransactionRequest) returns (CommitTransactionResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/transaction/commit"
+      body: "*"
+    };
+  }
+
+  // Roll back an interactive transaction: discard all buffered writes.
+  rpc RollbackTransaction(RollbackTransactionRequest) returns (RollbackTransactionResponse) {
+    option (google.api.http) = {
+      post: "/v1/query/transaction/rollback"
+      body: "*"
+    };
+  }
 }
 
 message ExecuteCypherRequest {
@@ -56,6 +84,12 @@ message ExecuteCypherRequest {
   //
   // Read-only queries ignore this field.
   coordinode.v1.replication.WriteConcern write_concern = 5;
+
+  // Interactive transaction handle (from BeginTransaction). When non-zero,
+  // this statement runs inside that transaction: it reads the transaction's
+  // pinned snapshot and its writes buffer until CommitTransaction. When zero
+  // (omitted), the statement auto-commits on its own (the default).
+  uint64 transaction_id = 6;
 }
 
 message ExecuteCypherResponse {
@@ -101,3 +135,27 @@ message QueryPlan {
   repeated QueryPlan children = 3;
   double estimated_rows = 4;
 }
+
+message BeginTransactionRequest {}
+
+message BeginTransactionResponse {
+  // Handle for subsequent ExecuteCypher / CommitTransaction /
+  // RollbackTransaction calls. Always non-zero.
+  uint64 transaction_id = 1;
+}
+
+message CommitTransactionRequest {
+  uint64 transaction_id = 1;
+}
+
+message CommitTransactionResponse {
+  // Raft log index the commit was applied at on the serving node — the causal
+  // token clients pass as `after_index` on later reads. 0 in embedded mode.
+  uint64 applied_index = 1;
+}
+
+message RollbackTransactionRequest {
+  uint64 transaction_id = 1;
+}
+
+message RollbackTransactionResponse {}
