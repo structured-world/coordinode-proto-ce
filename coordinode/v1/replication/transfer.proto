@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package coordinode.v1.replication;
+
+// Inter-node bulk segment transfer: the transport for replication repair, node
+// resync, and (per shard) migration. The source streams a segment's pieces to
+// the target, which verifies each piece's checksum, decodes it, and writes it to
+// local storage. BitTorrent-inspired: a target that has received pieces can in
+// turn serve them to other targets, turning linear transfer into O(log N) fanout.
+//
+// This is an internal cluster RPC (node-to-node), not a client-facing API.
+service SegmentTransferService {
+  // Push one segment to this node. The caller (source) opens the stream with a
+  // header frame carrying the segment id and its transfer manifest, then sends
+  // one piece frame per piece in index order. The callee (target) verifies each
+  // wire piece against the manifest's per-piece checksum, decodes it, assembles
+  // the segment, verifies the whole-segment checksum, and replies once with the
+  // outcome. A checksum failure aborts the transfer (corrupt data is never
+  // written).
+  rpc TransferPieces(stream PieceData) returns (TransferAck);
+}
+
+// One frame of a transfer stream: the leading header, then one frame per piece.
+message PieceData {
+  oneof frame {
+    // First frame: segment identity and transfer manifest. Exactly one per
+    // stream, before any piece frame.
+    SegmentTransferHeader header = 1;
+
+    // A single wire (encoded) piece. Sent in ascending index order after the
+    // header.
+    PieceFrame piece = 2;
+  }
+}
+
+// Segment identity plus the transfer manifest the target needs to verify and
+// decode the incoming pieces. Carries only what the target cannot compute
+// itself: the per-piece and whole-segment checksums and the wire encoding.
+message SegmentTransferHeader {
+  // Placement-layer segment id (`SegmentDescriptor.id`) being transferred.
+  uint64 segment_id = 1;
+
+  // Wire encoding applied to every piece, as the swarm `PieceEncoding`
+  // discriminant: 0 = none (raw), 1 = lz4, 2 = zstd.
+  uint32 encoding = 2;
+
+  // zstd effort when `encoding` = 2 (zstd), as the `ZstdLevel` discriminant:
+  // 0 = fastest, 1 = default, 2 = better. Ignored for other encodings. The
+  // target does not need the level to decode (the zstd frame is self-describing)
+  // but it is carried for observability and parity with the source's manifest.
+  uint32 zstd_level = 3;
+
+  // xxh3-64 of each wire (encoded) piece, in index order. The piece count is
+  // this list's length; the target verifies each arriving piece against its
+  // entry before decoding.
+  repeated uint64 piece_hashes = 4;
+
+  // xxh3-64 of the whole raw (decoded) segment, verified after assembly.
+  uint64 total_hash = 5;
+
+  // Raw (pre-encoding) size of each piece in bytes, last piece excepted. Carried
+  // so the target can reconstruct the full manifest (size-hinting the output);
+  // not required to verify or decode.
+  uint32 piece_size = 6;
+
+  // Total raw segment length in bytes. Used by the target to pre-size the output
+  // sink; not required to verify or decode.
+  uint64 total_len = 7;
+}
+
+// A single encoded piece on the wire.
+message PieceFrame {
+  // Piece index (0-based). Frames arrive in ascending order.
+  uint32 index = 1;
+
+  // Encoded piece bytes, hashed (over these wire bytes) by the matching
+  // `piece_hashes` entry in the header.
+  bytes wire = 2;
+}
+
+// The target's one-shot reply after the stream completes.
+message TransferAck {
+  // True when every piece verified, decoded, and the whole-segment checksum
+  // matched; the segment is durably written. False on any failure.
+  bool ok = 1;
+
+  // Human-readable failure cause when `ok` is false (checksum mismatch, decode
+  // error, short stream, local I/O). Empty when `ok` is true.
+  string error = 2;
+
+  // Number of pieces the target received and verified before replying.
+  uint32 pieces_received = 3;
+}
