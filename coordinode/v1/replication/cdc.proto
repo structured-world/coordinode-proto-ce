@@ -91,10 +91,13 @@ message ChangeOp {
   // Storage partition (see coordinode_storage::engine::partition::Partition).
   uint32 partition = 2;
 
-  // Storage key. Format depends on partition type.
+  // Storage key. Format depends on partition type. For REMOVE_RANGE this carries
+  // the range's inclusive start bound.
   bytes key = 3;
 
-  // Value bytes. Empty for DELETE ops.
+  // Value bytes. Empty for DELETE ops; carries the merge operand for MERGE. For
+  // REMOVE_RANGE this carries the range's exclusive end bound (the half-open
+  // range deleted is [key, value)).
   bytes value = 4;
 }
 
@@ -106,4 +109,9 @@ enum ChangeOpType {
   NOOP = 4;
   RAFT_ENTRY = 5;
   RAFT_TRUNCATION = 6;
+  // Delete every key in the half-open range [key, value) of `partition` with a
+  // single range tombstone. Emitted for a dense contiguous run of deleted keys
+  // (run-length coalescing) or a whole-prefix DROP; the range covers only keys
+  // that are all being deleted, never a surviving key in a gap.
+  REMOVE_RANGE = 7;
 }
