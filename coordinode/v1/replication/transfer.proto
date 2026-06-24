@@ -18,6 +18,77 @@ service SegmentTransferService {
   // outcome. A checksum failure aborts the transfer (corrupt data is never
   // written).
   rpc TransferPieces(stream PieceData) returns (TransferAck);
+
+  // Receiver-driven swarm pull. A node that needs a segment (replication repair,
+  // resync, the target of a migration) asks a peer holding it for the transfer
+  // manifest plus the set of pieces that peer can serve, then pulls individual
+  // pieces by index. Issued in parallel against several peers, this drives the
+  // rarest-first, multi-source download (every receiver also becomes a source).
+  // All sources produce byte-identical pieces for the same descriptor + split
+  // parameters (export is a deterministic key-range scan), so per-piece hashes
+  // match across peers and pieces fetched from different sources interleave.
+  rpc GetSegmentManifest(SegmentManifestRequest) returns (SegmentManifestReply);
+
+  // Fetch one wire (encoded) piece by index for the receiver-driven pull above.
+  rpc GetPiece(PieceRequest) returns (PieceFrame);
+}
+
+// Addresses a segment to serve by its placement-descriptor coordinates plus the
+// split parameters every source must agree on. The coordinates let a peer build
+// the segment from local storage on demand; the split parameters make every
+// peer's pieces byte-identical so their checksums match in a multi-source pull.
+message SegmentDescriptorRef {
+  // Placement-layer segment id (`SegmentDescriptor.id`).
+  uint64 segment_id = 1;
+
+  // Partition wire tag the segment's entries live in.
+  uint32 partition = 2;
+
+  // Half-open key range `[range_start, range_end)` the segment covers.
+  bytes range_start = 3;
+
+  // Exclusive upper bound; empty means unbounded above (to end of partition).
+  bytes range_end = 4;
+
+  // Raw (pre-encoding) bytes per piece, last piece excepted. Every source must
+  // use the same value or piece boundaries (and thus hashes) diverge.
+  uint32 piece_size = 5;
+
+  // Wire encoding applied to each piece, as the swarm `PieceEncoding`
+  // discriminant: 0 = none, 1 = lz4, 2 = zstd.
+  uint32 encoding = 6;
+
+  // zstd effort when `encoding` = 2, as the `ZstdLevel` discriminant
+  // (0 = fastest, 1 = default, 2 = better). Ignored otherwise.
+  uint32 zstd_level = 7;
+}
+
+// Request a segment's transfer manifest from a peer.
+message SegmentManifestRequest {
+  // The segment + split parameters to build the manifest for.
+  SegmentDescriptorRef segment = 1;
+}
+
+// A peer's manifest for a segment plus which of its pieces it can serve.
+message SegmentManifestReply {
+  // The transfer manifest (per-piece + whole-segment checksums, encoding, sizes)
+  // — same shape the streaming push sends as its leading header.
+  SegmentTransferHeader manifest = 1;
+
+  // Bitfield over the segment's pieces, little-endian bit order: bit `i` set
+  // means this peer can serve piece `i`. A peer holding the whole segment sets
+  // every bit.
+  bytes piece_bitfield = 2;
+}
+
+// Request one piece of a segment from a peer.
+message PieceRequest {
+  // The segment + split parameters; must match the manifest request so the
+  // served piece's hash matches the manifest entry.
+  SegmentDescriptorRef segment = 1;
+
+  // Zero-based piece index to fetch.
+  uint32 index = 2;
 }
 
 // One frame of a transfer stream: the leading header, then one frame per piece.
