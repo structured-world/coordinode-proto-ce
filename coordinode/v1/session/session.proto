@@ -1,0 +1,191 @@
+syntax = "proto3";
+
+package coordinode.v1.session;
+
+import "coordinode/v1/common/types.proto";
+import "coordinode/v1/query/cypher.proto";
+
+// Multiplexed bidirectional session.
+//
+// One long-lived bidirectional stream carries many concurrent operations for a
+// single client. The client fires a batch of requests into the stream; the
+// server executes them concurrently and streams results back as independent
+// cursors, tagged by request id, in completion order rather than send order. An
+// interactive transaction rides the same session as one interleaved sub-thread
+// alongside non-transactional requests. The session is sticky to the serving
+// node for its lifetime. The unary query and transaction RPCs remain the simple
+// default; this stream is their streaming superset.
+service SessionService {
+  // Open a session. The client sends a stream of ClientFrames (queries and
+  // transaction-control operations); the server returns a stream of
+  // ServerFrames (cursor chunks and transaction acknowledgements), each tagged
+  // with the originating request_id so responses demultiplex out of order.
+  rpc Session(stream ClientFrame) returns (stream ServerFrame);
+}
+
+// Statement ordering policy for an interactive transaction, fixed at Begin.
+enum Ordering {
+  // Treated as ORDERING_ORDERED.
+  ORDERING_UNSPECIFIED = 0;
+  // Each statement carries a per-transaction monotonic nonce. The client
+  // numbers the chain and may send frames out of wire order; the server
+  // reassembles by nonce in a reorder buffer and applies strictly in nonce
+  // order. A failure at nonce K aborts the transaction.
+  ORDERING_ORDERED = 1;
+  // The client bursts statements without awaiting; the server applies them
+  // serially in wire-arrival order. The first failing statement rolls the whole
+  // transaction back.
+  ORDERING_UNORDERED = 2;
+}
+
+// One operation sent by the client on the session stream.
+message ClientFrame {
+  // Client-assigned, session-scoped correlation id. Every ServerFrame produced
+  // for this operation carries the same request_id, so a client demultiplexes
+  // concurrent responses and cursor chunks that arrive out of order. The client
+  // is responsible for keeping request_ids unique within a live session.
+  uint64 request_id = 1;
+
+  // The operation. Exactly one is set.
+  oneof op {
+    // Run a query statement (autonomous or inside a transaction).
+    Execute execute = 2;
+    // Open an interactive transaction; the server replies with a Begun(txid).
+    Begin begin = 3;
+    // Commit an interactive transaction by its txid.
+    Commit commit = 4;
+    // Roll back an interactive transaction by its txid.
+    Rollback rollback = 5;
+    // Abort an in-flight request and close its cursor.
+    Cancel cancel = 6;
+  }
+}
+
+// Execute one query statement.
+message Execute {
+  // Query text in the session's dialect (Cypher today; SQL once the SQL
+  // frontend lands). The server selects a query frontend per session or per
+  // statement and never inspects the syntax above that frontend.
+  string query = 1;
+
+  // Named query parameters bound at execution time. Same shape as the unary
+  // ExecuteCypherRequest parameters.
+  map<string, coordinode.v1.common.PropertyValue> parameters = 2;
+
+  // Interactive transaction handle from a prior Begun. Zero means the statement
+  // is autonomous (implicit begin + commit). Non-zero runs the statement inside
+  // that transaction: it reads the transaction's pinned snapshot and its writes
+  // buffer until Commit.
+  uint64 txid = 3;
+
+  // Per-transaction ordering nonce, used only when the transaction was opened
+  // with ORDERING_ORDERED. The server applies the transaction's statements in
+  // ascending nonce order regardless of wire-arrival order. Ignored for
+  // autonomous statements and for ORDERING_UNORDERED transactions.
+  uint64 nonce = 4;
+}
+
+// Open an interactive transaction.
+message Begin {
+  // Statement ordering policy for the transaction.
+  Ordering ordering = 1;
+
+  // How long (milliseconds) the server's reorder buffer waits for a missing
+  // nonce before aborting the transaction, in ORDERING_ORDERED mode. Zero uses
+  // the per-session default. Distinct from the idle-reap timeout that closes an
+  // untouched transaction.
+  uint32 drain_timeout_ms = 2;
+}
+
+// Commit an interactive transaction.
+message Commit {
+  // Transaction handle from a prior Begun.
+  uint64 txid = 1;
+
+  // Expected final nonce of the transaction's statement chain, in
+  // ORDERING_ORDERED mode, so the server can detect a complete chain before it
+  // commits. Zero when unset (UNORDERED transactions, or callers that do not
+  // pipeline ahead of the commit).
+  uint64 last_nonce = 2;
+}
+
+// Roll back an interactive transaction, discarding all buffered writes.
+message Rollback {
+  // Transaction handle from a prior Begun.
+  uint64 txid = 1;
+}
+
+// Abort an in-flight request and close its cursor.
+message Cancel {
+  // request_id of the in-flight request to abort.
+  uint64 target_request_id = 1;
+}
+
+// One result event sent by the server on the session stream.
+message ServerFrame {
+  // request_id of the ClientFrame this event answers.
+  uint64 request_id = 1;
+
+  // The event. Exactly one is set.
+  oneof event {
+    // Acknowledges Begin and returns the allocated transaction handle.
+    Begun begun = 2;
+    // Opens a cursor for a query, carrying the column header.
+    CursorOpen cursor_open = 3;
+    // A batch of result rows for an open cursor; many may arrive per request.
+    RowBatch rows = 4;
+    // Closes a cursor, carrying final query statistics.
+    CursorEnd cursor_end = 5;
+    // Acknowledges Commit, carrying the causal applied-index token.
+    Committed committed = 6;
+    // Reports an error for the request; terminates its cursor.
+    SessionError error = 7;
+  }
+}
+
+// Acknowledges Begin.
+message Begun {
+  // Allocated transaction handle, always non-zero. Pass it as Execute.txid and
+  // to Commit / Rollback.
+  uint64 txid = 1;
+}
+
+// Opens a result cursor.
+message CursorOpen {
+  // Result column names, in result order.
+  repeated string columns = 1;
+}
+
+// A batch of result rows for an open cursor. Rows reuse the unary query Row
+// message so a session result and a unary result decode identically.
+message RowBatch {
+  // Result rows, each a list of property values aligned to CursorOpen.columns.
+  repeated coordinode.v1.query.Row rows = 1;
+}
+
+// Closes a result cursor.
+message CursorEnd {
+  // Final query statistics for the request. Reuses the unary query stats so the
+  // causal applied-index and write counts decode identically.
+  coordinode.v1.query.QueryStats stats = 1;
+}
+
+// Acknowledges Commit.
+message Committed {
+  // Raft log index the commit was applied at on the serving node: the causal
+  // operationTime token a client passes as after_index on later causal reads.
+  // Zero in embedded mode (no Raft cluster).
+  uint64 applied_index = 1;
+}
+
+// Reports an error for a request.
+message SessionError {
+  // Stable numeric error code (mirrors the gRPC status taxonomy used elsewhere
+  // on the server). Lets a client branch on the failure class without parsing
+  // the message text.
+  uint32 code = 1;
+
+  // Human-readable error detail for logs and diagnostics. Not a stable contract;
+  // branch on code, not on this string.
+  string message = 2;
+}
