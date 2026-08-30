@@ -30,6 +30,8 @@ message PropertyValue {
     Vector vector_value = 7;
     PropertyList list_value = 8;
     PropertyMap map_value = 9;
+    MultiVector multi_vector_value = 10;
+    Path path_value = 11;
   }
 }
 
@@ -46,4 +48,36 @@ message PropertyList {
 // A map of string keys to property values.
 message PropertyMap {
   map<string, PropertyValue> entries = 1;
+}
+
+// An ordered set of equal-width vectors representing one item, as produced by
+// late-interaction retrieval models (ColBERT v2, MaxSim) where a document is
+// several token-level embeddings rather than one pooled vector.
+//
+// Every row carries the same number of dimensions; the sender enforces that
+// invariant, so a receiver may read `rows[0]` for the width.
+message MultiVector {
+  repeated Vector rows = 1;
+}
+
+// A graph path: the alternating node/relationship sequence produced by
+// `shortestPath(...)` and by a variable-length `MATCH p = (a)-[*]->(b)`.
+//
+// `rels` has exactly one fewer entry than `nodes` on a non-empty path, and the
+// n-th hop connects `nodes[n]` to `nodes[n+1]`. An empty path (a single node,
+// zero hops) carries one node and no relationships.
+message Path {
+  // Node ids along the path, start to end.
+  repeated uint64 nodes = 1;
+  // Relationship hops, in the same order.
+  repeated PathRel rels = 2;
+}
+
+// One relationship hop inside a Path: its type and endpoint node ids.
+// Relationship properties are not carried; fetch them by endpoint pair when
+// they are needed.
+message PathRel {
+  string edge_type = 1;
+  uint64 source = 2;
+  uint64 target = 3;
 }
