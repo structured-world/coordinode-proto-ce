@@ -4,6 +4,7 @@ package coordinode.v1.session;
 
 import "coordinode/v1/common/types.proto";
 import "coordinode/v1/query/cypher.proto";
+import "coordinode/v1/replication/consistency.proto";
 
 // Multiplexed bidirectional session.
 //
@@ -58,7 +59,33 @@ message ClientFrame {
     Rollback rollback = 5;
     // Abort an in-flight request and close its cursor.
     Cancel cancel = 6;
+    // Read, and optionally change, this connection's settings. Answered with
+    // a ConnectionStatus carrying the settings now in effect.
+    Configure configure = 7;
   }
+}
+
+// Read, and optionally change, the settings this connection applies to
+// statements that do not carry their own.
+//
+// Every field is optional: one that is absent is left as it is, so a client
+// changes one setting without restating the others, and a Configure with none
+// set is simply a request to report the current status. The server answers
+// with a ConnectionStatus whose settings are the ones now in effect, which is
+// how a client confirms a change actually took rather than assuming it did.
+message Configure {
+  // Default read concern for statements that carry none.
+  optional coordinode.v1.replication.ReadConcern read_concern = 1;
+
+  // Default write concern for statements that carry none.
+  optional coordinode.v1.replication.WriteConcern write_concern = 2;
+
+  // Default read preference for statements that carry none.
+  optional coordinode.v1.replication.ReadPreference read_preference = 3;
+
+  // Default reorder-buffer drain timeout, in milliseconds, for transactions
+  // opened with ORDERING_ORDERED and no explicit drain_timeout_ms.
+  optional uint32 drain_timeout_ms = 4;
 }
 
 // Execute one query statement.
@@ -140,7 +167,64 @@ message ServerFrame {
     Committed committed = 6;
     // Reports an error for the request; terminates its cursor.
     SessionError error = 7;
+    // The state of this connection: whether it can serve writes, what it can
+    // see of the cluster, and the settings in effect. Sent in answer to a
+    // Configure, and unsolicited whenever the state changes.
+    ConnectionStatus connection_status = 8;
   }
+}
+
+// The state of this connection, from the serving node's point of view.
+//
+// Sent unsolicited whenever it changes, with request_id zero, because the
+// change a client is usually waiting for is one nobody asked about: a node cut
+// off from the cluster cannot serve writes, and the client needs to know the
+// moment it can again. Holding the session and waiting for that event beats
+// retrying on a timer whose interval is a guess about how long an election
+// takes. It is also the answer to a Configure, where request_id echoes it.
+//
+// This describes THIS connection, not the cluster: it is what this node can do
+// for this client right now. The cluster-wide picture, with every node's role
+// and lag, is an operator's view and lives in the admin service.
+message ConnectionStatus {
+  // Whether statements that write can be served through this connection right
+  // now. True on the leader, and true on a follower that can reach the leader,
+  // since a write arriving at a follower is carried there. False when no
+  // leader is reachable, which is the condition a waiting client is watching
+  // for the end of.
+  bool writable = 1;
+
+  // Whether this node has contact with the cluster at all. False on a node
+  // that has lost touch with its peers: reads from it still answer, from a
+  // snapshot that no longer advances.
+  bool connected = 2;
+
+  // The node the cluster last named leader. Unset while an election is in
+  // flight or this node cannot tell.
+  optional uint64 leader_id = 3;
+
+  // Whether the node serving this connection is itself the leader. A client
+  // that wants to avoid the forwarding hop can use this to decide whether to
+  // reconnect to the leader named above.
+  bool served_by_leader = 4;
+
+  // Raft term this status was observed in. Increases at every election, so a
+  // client can tell a genuine leadership change from a repeated report.
+  uint64 raft_term = 5;
+
+  // Voting members the cluster is configured with.
+  uint32 voters = 6;
+
+  // Voting members this node currently counts as reachable, including itself.
+  // Compared against `voters`, this is what "the majority is present" means
+  // here, and it is what turns a vague outage into a number an operator and a
+  // client can both act on.
+  uint32 voters_reachable = 7;
+
+  // The settings in effect for statements that carry none of their own. Echoed
+  // whole so a client can confirm a Configure took effect, rather than assume
+  // the fields it sent are the ones now applied.
+  Configure settings = 8;
 }
 
 // Acknowledges Begin.
