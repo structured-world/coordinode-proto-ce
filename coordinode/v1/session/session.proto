@@ -260,6 +260,15 @@ message Committed {
   // operationTime token a client passes as after_index on later causal reads.
   // Zero in embedded mode (no Raft cluster).
   uint64 applied_index = 1;
+
+  // HLC commit timestamp (microseconds since the Unix epoch) every mutation of
+  // the transaction was applied at. Server-assigned. Equal to the storage
+  // sequence number of the write, so it is the exact snapshot anchor:
+  // `AS OF TIMESTAMP <commit_ts>` sees this transaction and nothing committed
+  // later; a change-stream consumer that has processed it resumes from
+  // `commit_ts + 1`. Present in every mode; a read-only transaction reports
+  // its pinned read timestamp.
+  uint64 commit_ts = 2;
 }
 
 // Reports an error for a request.

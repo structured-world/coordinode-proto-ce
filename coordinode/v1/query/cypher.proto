@@ -152,6 +152,15 @@ message CommitTransactionResponse {
   // Raft log index the commit was applied at on the serving node — the causal
   // token clients pass as `after_index` on later reads. 0 in embedded mode.
   uint64 applied_index = 1;
+
+  // HLC commit timestamp (microseconds since the Unix epoch) every mutation of
+  // the transaction was applied at. Server-assigned. Commit timestamps are the
+  // storage sequence numbers, so this value is the exact snapshot anchor for
+  // the write: `AS OF TIMESTAMP <commit_ts>` (or `ReadConcern.at_timestamp`)
+  // sees this transaction and nothing committed later, and a change-stream
+  // consumer that has processed it resumes from `commit_ts + 1`. Present in
+  // every mode; a read-only transaction reports its pinned read timestamp.
+  uint64 commit_ts = 2;
 }
 
 message RollbackTransactionRequest {
