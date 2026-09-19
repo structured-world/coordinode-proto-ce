@@ -73,8 +73,9 @@ message ExecuteCypherRequest {
 
   // Durability guarantee for write statements (CREATE / MERGE / SET / DELETE).
   //
-  // UNSPECIFIED / omitted defaults to W1 (leader-acknowledged, not replicated).
-  // Use MAJORITY for production writes that must survive a single node failure.
+  // UNSPECIFIED / omitted defaults to MAJORITY: an acknowledged write survives
+  // the loss of one replica. Name a weaker level explicitly, per request, for
+  // writes that may be lost with their leader.
   //
   // Causal sessions (read_concern.after_index > 0) require write_concern.level
   // >= MAJORITY. The server rejects writes with lower durability in causal

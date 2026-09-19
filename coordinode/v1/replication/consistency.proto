@@ -12,15 +12,17 @@ package coordinode.v1.replication;
 // for telemetry, hot counters, session state — never for source-of-truth
 // data.
 enum WriteConcernLevel {
+  // No level named: the server applies the default, MAJORITY.
   WRITE_CONCERN_LEVEL_UNSPECIFIED = 0;
-  // Fire-and-forget (no acknowledgement). Data may be lost immediately —
-  // use only for non-critical metrics.
+  // Fire-and-forget: no acknowledgement is promised. The write still goes
+  // through the leader and the replicated log like any other; the caller is
+  // simply not told whether it committed. Use only for non-critical metrics.
   WRITE_CONCERN_LEVEL_W0 = 1;
-  // Acknowledged by leader only (leader WAL fsync). Default in standalone
-  // mode and the lowest level safe to default for typical applications.
+  // Acknowledged by the leader alone (leader WAL fsync). The write can be
+  // rolled back if the leader fails before it is replicated.
   WRITE_CONCERN_LEVEL_W1 = 2;
-  // Acknowledged by majority of replicas (Raft quorum). Strongest durability
-  // before Linearizable read concerns; safe under single-node failure.
+  // Acknowledged by a majority of replicas (Raft quorum); safe under the loss
+  // of one replica. The default.
   WRITE_CONCERN_LEVEL_MAJORITY = 3;
   // Acknowledged after RAM-only write (~1µs ACK). Visible immediately to
   // local readers; background drain to Raft batches them into proposals.
