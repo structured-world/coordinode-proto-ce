@@ -2,43 +2,80 @@ syntax = "proto3";
 
 package coordinode.v1.replication;
 
-// Write concern levels.
-// Write durability levels, ordered W0 < MEMORY < CACHE < W1 < MAJORITY.
-//
-// Selecting a level below W1 trades durability for latency: MEMORY and CACHE
-// acknowledge the client before the write is replicated through Raft, with
-// the drain thread batching them into proposals asynchronously. A leader
-// crash before drain loses every in-flight MEMORY/CACHE write. Use only
-// for telemetry, hot counters, session state — never for source-of-truth
-// data.
-enum WriteConcernLevel {
-  // No level named: the server applies the default, MAJORITY.
-  WRITE_CONCERN_LEVEL_UNSPECIFIED = 0;
-  // Fire-and-forget: no acknowledgement is promised. The write still goes
-  // through the leader and the replicated log like any other; the caller is
-  // simply not told whether it committed. Use only for non-critical metrics.
-  WRITE_CONCERN_LEVEL_W0 = 1;
-  // Acknowledged by the leader alone (leader WAL fsync). The write can be
-  // rolled back if the leader fails before it is replicated.
-  WRITE_CONCERN_LEVEL_W1 = 2;
-  // Acknowledged by a majority of replicas (Raft quorum); safe under the loss
-  // of one replica. The default.
-  WRITE_CONCERN_LEVEL_MAJORITY = 3;
-  // Acknowledged after RAM-only write (~1µs ACK). Visible immediately to
-  // local readers; background drain to Raft batches them into proposals.
-  // Lost on process crash before drain.
-  WRITE_CONCERN_LEVEL_MEMORY = 4;
-  // Acknowledged after RAM + NVMe cache write (~100µs ACK). Survives process
-  // crash but not power failure before drain. Background drain to Raft.
-  WRITE_CONCERN_LEVEL_CACHE = 5;
+// Named write concern modes: rules for `w` that are not a fixed count of
+// members.
+enum WriteConcernMode {
+  // Not a valid choice on the wire: a WriteConcern whose `w` is unset means
+  // the default, MAJORITY. Set `mode` explicitly to one of the values below.
+  WRITE_CONCERN_MODE_UNSPECIFIED = 0;
+  // Acknowledged once a majority of the group's members (the leader included)
+  // holds the write in the state named by `journal`. Survives the loss of a
+  // minority. The default.
+  WRITE_CONCERN_MODE_MAJORITY = 1;
 }
 
-// Write concern configuration.
+// The state each acknowledging member must hold the write in before it
+// counts towards `w`. Independent of `w`: `w` says how many members, `journal`
+// says how durably each of them holds the write.
+//
+// A write concern decides when the caller is answered, never whether the
+// write is replicated: every write enters the group's log through the leader
+// and is applied on every member. CACHE and MEMORY answer before the write is
+// in the log and keep it in a volatile overlay until the drain proposes it;
+// a leader crash before the drain loses every write still in that overlay.
+// Use them for telemetry, hot counters and session state only, never for
+// source-of-truth data.
+enum Journal {
+  // Same as JOURNAL: the default when the field is omitted.
+  JOURNAL_UNSPECIFIED = 0;
+  // The write is fsynced to the member's journal (the Raft log) before it is
+  // counted. Survives process crash and power failure.
+  JOURNAL_JOURNAL = 1;
+  // The write is in the member's RAM + NVMe overlay (~100µs) before it is
+  // counted. Survives a process crash, not a power failure before the drain.
+  JOURNAL_CACHE = 2;
+  // The write is in the member's RAM-only overlay (~1µs) before it is
+  // counted. Visible at once to local readers that accept volatile data;
+  // lost on process crash before the drain.
+  JOURNAL_MEMORY = 3;
+}
+
+// Write concern configuration for a write statement or a session default.
+//
+// Two independent axes, as in MongoDB: `w` (how many members acknowledge) and
+// `journal` (what state each of them holds the write in). `w` is either a
+// count of members or a named mode; the two never share a number space, so
+// `acks: 3` is three members in a group of any size and can never be
+// confused with a mode. Leaving `w` unset selects the default, MAJORITY;
+// asking for fire-and-forget is always explicit (`acks: 0`). Neither axis is
+// ever silently changed to satisfy the other: a combination the server cannot
+// honour is rejected with INVALID_ARGUMENT.
 message WriteConcern {
-  WriteConcernLevel level = 1;
-  // Require WAL fsync before acknowledgement.
-  bool journal = 2;
-  // Timeout in milliseconds (0 = no timeout).
+  // Field 1 carried the retired WriteConcernLevel enumeration; field 2 the
+  // retired boolean journal flag, replaced by the three-valued `journal`.
+  reserved 1, 2;
+  reserved "level";
+
+  oneof w {
+    // Number of members, the leader included, that must hold the write in
+    // the `journal` state before the caller is answered. 0 = fire-and-forget:
+    // the write still goes through the leader and the log, the caller is
+    // answered at once and is not told whether it committed. 1 = the leader
+    // alone (rollback possible if the leader fails before replication). N = N
+    // members. A value above the group's member count is rejected with
+    // INVALID_ARGUMENT.
+    uint32 acks = 4;
+    // A named rule instead of a count. See WriteConcernMode.
+    WriteConcernMode mode = 5;
+  }
+  // The state each counted member holds the write in. Omitted = JOURNAL.
+  // CACHE and MEMORY are accepted only with `acks: 0` or `acks: 1`: a
+  // volatile state cannot be confirmed across members, so combining them
+  // with `acks` above 1 or with MAJORITY is rejected with INVALID_ARGUMENT.
+  Journal journal = 6;
+  // Time in milliseconds to wait for `w` to be satisfied; 0 = no timeout. On
+  // timeout the call fails, but the write is NOT rolled back: it may still
+  // commit afterwards.
   uint32 timeout_ms = 3;
 }
 

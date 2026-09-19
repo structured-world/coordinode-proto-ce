@@ -73,12 +73,14 @@ message ExecuteCypherRequest {
 
   // Durability guarantee for write statements (CREATE / MERGE / SET / DELETE).
   //
-  // UNSPECIFIED / omitted defaults to MAJORITY: an acknowledged write survives
-  // the loss of one replica. Name a weaker level explicitly, per request, for
-  // writes that may be lost with their leader.
+  // Omitted, or present with `w` unset, defaults to MAJORITY with the write
+  // journaled on each counted member: an acknowledged write survives the loss
+  // of a minority. Ask for a weaker concern explicitly, per request (`acks: 1`,
+  // `acks: 0`, `journal: MEMORY`), for writes that may be lost with their
+  // leader.
   //
-  // Causal sessions (read_concern.after_index > 0) require write_concern.level
-  // >= MAJORITY. The server rejects writes with lower durability in causal
+  // Causal sessions (read_concern.after_index > 0) require write_concern
+  // MAJORITY. The server rejects writes with lower durability in causal
   // sessions because a non-majority write may never be replicated: if the leader
   // crashes before drain, the returned applied_index becomes a dangling causal
   // dependency that can never be satisfied by a follower read.
