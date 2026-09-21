@@ -64,6 +64,17 @@ message Node {
   // `node_id` (bijective). Stable across schema changes, restarts, replication.
   // Use this as the primary node reference in application code per ADR-022.
   string element_id = 4;
+
+  // The version of this node: the HLC timestamp of the commit that last wrote
+  // it. This is the value a conditional write is stated against
+  // (CommitTransactionRequest.expect), and it is the same number a write
+  // receipt returns as commit_ts, so a read and a later write speak of one
+  // thing rather than two.
+  //
+  // Zero means the server did not resolve a version for this node, not that
+  // the node is at version zero: a node that exists always has the commit
+  // that wrote it.
+  uint64 version = 5;
 }
 
 // An edge in the property graph.

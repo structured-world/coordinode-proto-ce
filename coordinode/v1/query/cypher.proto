@@ -149,6 +149,29 @@ message BeginTransactionResponse {
 
 message CommitTransactionRequest {
   uint64 transaction_id = 1;
+
+  // Commit only while these nodes are still at these versions. An empty list
+  // is the ordinary unconditional commit.
+  //
+  // The condition is checked when the transaction commits, against the state
+  // at that moment, so it protects the window between the read the caller
+  // built on and the write it is making. A mismatch refuses the whole
+  // transaction with ABORTED and reason REVISION_MISMATCH, carrying
+  // `expected_version` and `current_version` in the error metadata: the
+  // caller decides what to do next from those rather than reading the node
+  // again and racing a second time.
+  repeated ExpectedNodeVersion expect = 2;
+}
+
+// A node and the version the caller believes it is at.
+message ExpectedNodeVersion {
+  uint64 node_id = 1;
+
+  // The version read earlier (Node.version). Unset requires the node NOT to
+  // exist, which is the create-if-absent form of the same condition; it is
+  // `optional` rather than a zero sentinel because zero is not a version a
+  // node can have, and a field that means "absent" must be able to say so.
+  optional uint64 version = 2;
 }
 
 message CommitTransactionResponse {
