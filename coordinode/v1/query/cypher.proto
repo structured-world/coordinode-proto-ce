@@ -121,6 +121,17 @@ message QueryStats {
   // True when the read was served by the Raft leader.
   // False for follower reads (read_preference = SECONDARY or NEAREST).
   bool served_by_leader = 8;
+
+  // The HLC timestamp this statement's writes landed at, for a statement that
+  // committed on its own. Zero for a read, and for a statement inside an
+  // interactive transaction, whose timestamp belongs to the commit that ends
+  // it (CommitTransactionResponse.commit_ts).
+  //
+  // This is the version of what the statement wrote: the same number
+  // Node.version reports and CommitTransactionRequest.expect is stated
+  // against. A client that writes and then means to write again
+  // conditionally already holds what to state, with no read in between.
+  uint64 commit_ts = 9;
 }
 
 message ExplainCypherRequest {
