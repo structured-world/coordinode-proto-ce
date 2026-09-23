@@ -67,11 +67,11 @@ message TextResult {
   // values depend on corpus size and per-field weights.
   float score = 2;
 
-  // HTML-tagged snippet of matching text with <b> tags around matched terms.
+  // HTML-tagged snippet of matching text with `<b>` tags around matched terms.
   // Derived from the indexed field text using tantivy's SnippetGenerator.
   // Empty when language-specific search is used (highlight requires default
   // language tokenization) or when the indexed field has no stored content.
-  // Strip <b> and </b> tags for plain-text display.
+  // Strip `<b>` and `</b>` tags for plain-text display.
   string snippet = 3;
 }
 
