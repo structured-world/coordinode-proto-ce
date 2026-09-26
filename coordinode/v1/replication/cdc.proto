@@ -2,38 +2,38 @@ syntax = "proto3";
 
 package coordinode.v1.replication;
 
-// CE Change Data Capture: tail oplog segments via gRPC server-side streaming.
+// CE Change Data Capture: tail a shard's Raft log via gRPC server-side
+// streaming.
 //
-// Single-consumer per shard. Client reconnects with a ResumeToken to continue
-// from last acked position. At-least-once delivery.
-//
-// EE extensions (NATS/Kafka sinks, CEL pattern matching, cross-shard merge-sort,
-// exactly-once delivery, multiple concurrent consumers) are in R400.
+// Client reconnects with a ResumeToken to continue from the last acked
+// position. At-least-once delivery.
 service ChangeStreamService {
-  // Open a long-lived server-side streaming RPC that tails oplog segments.
+  // Open a long-lived server-side streaming RPC that tails the Raft log.
   //
-  // The server streams ChangeEvent messages as new entries are sealed.
-  // When caught up, the server polls every ~100ms for new sealed segments.
-  // The stream stays open until the client cancels or the connection drops.
+  // The server streams a ChangeEvent for each log entry once the serving node
+  // has applied it; entries that are not committed yet are never sent. When
+  // caught up, the server polls every ~100ms for newly applied entries. The
+  // stream stays open until the client cancels or the connection drops.
   //
   // On reconnect, pass the last received ResumeToken to resume without gaps.
   // Omit resume_token (or set all fields to zero) to start from the oldest
-  // available segment.
+  // retained entry.
   rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
 }
 
-// Position within the oplog used to resume after disconnect.
+// Position in a shard's Raft log used to resume after disconnect.
+//
+// The token names one log index, `segment_id + entry_offset`: the next entry
+// to deliver. It stays valid when the server rewrites its log files.
 message ResumeToken {
   // Shard this stream targets. Always 0 in CE single-shard mode.
   uint32 shard_id = 1;
 
-  // Identifies the segment file: equals the `first_index` embedded in the
-  // filename (`oplog-<segment_id:020>.bin`). A value of 0 means "start of
-  // oldest available segment".
+  // Log index of the first entry of the segment that held the last delivered
+  // entry. 0 together with `entry_offset` 0 means "the oldest retained entry".
   uint64 segment_id = 2;
 
-  // Number of entries from this segment already consumed.
-  // The next event delivered will be at offset `entry_offset` (0-based).
+  // Entries of that segment already delivered, counted from `segment_id`.
   uint64 entry_offset = 3;
 }
 
@@ -52,19 +52,21 @@ message CdcFilters {
 
 message SubscribeRequest {
   // Token from the last received ChangeEvent.position.
-  // Omit (all-zero) to start from the oldest available segment.
+  // Omit (all-zero) to start from the oldest retained entry.
   ResumeToken resume_token = 1;
 
   // Optional filter to reduce bandwidth.
   CdcFilters filters = 2;
 }
 
-// A single committed oplog entry delivered to the CDC consumer.
+// A single applied Raft log entry delivered to the CDC consumer.
 message ChangeEvent {
-  // HLC timestamp of the entry (upper 46 bits = wall-clock ms, lower 18 = logical).
+  // HLC commit timestamp of the entry (upper 46 bits = wall-clock ms, lower
+  // 18 = logical): the latest commit timestamp of the transactions it
+  // carries. 0 for an entry that carries none (membership, leader blank).
   uint64 ts = 1;
 
-  // Raft term when this entry was proposed.
+  // Term of the leader that wrote this entry.
   uint64 term = 2;
 
   // Raft log index. Monotonically increasing per shard.
