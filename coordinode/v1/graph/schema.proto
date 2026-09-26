@@ -175,7 +175,7 @@ message Label {
   // Schema revision (DDL snapshot identity). Advances on ALTER operations
   // that change write-path semantics (placement, shard_keys, mode). Distinct
   // from data-side versioning (MVCC commit_ts, future per-row OCC `_v`) —
-  // "revision" is reserved for DDL identity per ADR-023.
+  // "revision" always means DDL identity, never a data version.
   uint64 schema_revision = 3;
   // COMPUTED property specifications declared for this label.
   repeated ComputedPropertyDefinition computed_properties = 4;

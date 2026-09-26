@@ -62,7 +62,7 @@ message Node {
   map<string, coordinode.v1.common.PropertyValue> properties = 3;
   // Canonical opaque identifier: 13-character Crockford base32 encoding of
   // `node_id` (bijective). Stable across schema changes, restarts, replication.
-  // Use this as the primary node reference in application code per ADR-022.
+  // Use this as the primary node reference in application code.
   string element_id = 4;
 
   // The version of this node: the HLC timestamp of the commit that last wrote

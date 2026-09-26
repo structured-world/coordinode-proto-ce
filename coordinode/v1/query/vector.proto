@@ -89,8 +89,8 @@ message VectorIndexHealth {
   // Best-effort estimate of remaining rebuild time, in milliseconds. 0 unless
   // `serving_state == SERVING_STATE_REBUILDING`.
   uint64 eta_ms = 3;
-  // Freshness watermark: the HLC commit timestamp (wall-clock microseconds,
-  // ADR-007) of the last write the local index-maintenance worker has applied.
+  // Freshness watermark: the HLC commit timestamp (wall-clock microseconds)
+  // of the last write the local index-maintenance worker has applied.
   // This is the read-your-writes fence — a client that wrote at HLC W has been
   // served a fully-current index iff `indexed_hlc >= W`. 0 when nothing has
   // been applied yet or `serving_state == SERVING_STATE_OFFLINE`.

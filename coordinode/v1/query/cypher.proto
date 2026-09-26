@@ -114,7 +114,7 @@ message QueryStats {
   int64 execution_time_ms = 6;
 
   // Raft log index applied on the serving node at query time.
-  // Clients use this as `after_index` in subsequent causal reads (R142).
+  // Clients use this as `after_index` in subsequent causal reads.
   // 0 means the node is not part of a Raft cluster (embedded mode).
   uint64 applied_index = 7;
 
