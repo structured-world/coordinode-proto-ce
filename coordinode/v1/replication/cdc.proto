@@ -19,13 +19,70 @@ service ChangeStreamService {
   // Omit resume_token (or set all fields to zero) to start from the oldest
   // retained entry.
   //
-  // A stream does not hold the log: entries can be purged once the shard
-  // compacts its log, whether or not a stream still needs them. A token whose
-  // position the log no longer holds is refused with FAILED_PRECONDITION and
-  // ErrorInfo reason RETENTION_LOST (metadata `requested_index`,
-  // `first_retained_index`): the stream never resumes past a gap.
+  // Every stream reads as a registered consumer: the request names the
+  // consumer and either registers it with an explicit retention policy
+  // (`incarnation` 0) or resumes a live registration (`incarnation` from the
+  // first stream). The registration outlives the connection: a STRICT one
+  // until CancelSubscription, a BOUNDED one until a declared bound is
+  // crossed. The response's initial metadata carries the registration's
+  // incarnation as `x-coordinode-consumer-incarnation`.
+  //
+  // A token whose position the log no longer holds is refused with
+  // FAILED_PRECONDITION and ErrorInfo reason RETENTION_LOST (metadata
+  // `requested_index`, `first_retained_index`): the stream never resumes past
+  // a gap. A registration that has ended is refused with FAILED_PRECONDITION
+  // and reason CONSUMER_TERMINATED (metadata `incarnation`, `reason`,
+  // `checkpoint`); registering the id again starts a new incarnation.
   rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
+
+  // End a consumer's registration: it stops holding the log, and its
+  // incarnation is refused from then on. Refused with FAILED_PRECONDITION and
+  // reason CONSUMER_TERMINATED when the incarnation has already ended, and
+  // NOT_FOUND for an id never registered.
+  rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse);
 }
+
+// How long a consumer's registration protects the history it still needs.
+// One of the two must be chosen; there is no default.
+message ConsumerRetention {
+  oneof policy {
+    // Protection lasts until the consumer is cancelled. Missing heartbeats
+    // do not end it.
+    StrictRetention strict = 1;
+    // Protection ends once one of the declared bounds is crossed.
+    BoundedRetention bounded = 2;
+  }
+}
+
+// Protection until cancellation.
+message StrictRetention {}
+
+// Finite bounds after which the registration ends. Both limits are required
+// and must be above zero.
+message BoundedRetention {
+  // Most age, in milliseconds, of the oldest log entry the consumer has not
+  // yet been sent.
+  uint64 max_progress_lag_ms = 1;
+
+  // Most bytes of log the consumer's position may require the shard to keep.
+  uint64 max_retained_bytes = 2;
+
+  // Longest time, in milliseconds, without the consumer being connected and
+  // heartbeating. Absent: the registration does not end for being absent,
+  // only for the two limits above.
+  optional uint64 liveness_timeout_ms = 3;
+}
+
+message CancelSubscriptionRequest {
+  // The consumer to cancel.
+  string consumer_id = 1;
+
+  // The incarnation to cancel, from the Subscribe response metadata. A
+  // different incarnation of the same id is left alone.
+  uint64 incarnation = 2;
+}
+
+message CancelSubscriptionResponse {}
 
 // Position in a shard's Raft log used to resume after disconnect.
 //
@@ -63,13 +120,27 @@ message SubscribeRequest {
 
   // Optional filter to reduce bandwidth.
   CdcFilters filters = 2;
+
+  // The consumer this stream reads as: globally unique, chosen by the client.
+  // Required.
+  string consumer_id = 3;
+
+  // 0 registers the consumer anew with `retention`, starting at
+  // `resume_token` (or the oldest retained entry without one); refused with
+  // ALREADY_EXISTS while another incarnation of the id is live. Any other
+  // value resumes that live incarnation, and `retention` is ignored.
+  uint64 incarnation = 4;
+
+  // Required when registering (`incarnation` 0).
+  ConsumerRetention retention = 5;
 }
 
 // A single applied Raft log entry delivered to the CDC consumer.
 message ChangeEvent {
-  // HLC commit timestamp of the entry (upper 46 bits = wall-clock ms, lower
-  // 18 = logical): the latest commit timestamp of the transactions it
-  // carries. 0 for an entry that carries none (membership, leader blank).
+  // HLC commit timestamp of the entry, in wall-clock microseconds since the
+  // Unix epoch with logical increments inside one microsecond: the latest
+  // commit timestamp of the transactions it carries. 0 for an entry that
+  // carries none (membership, leader blank).
   uint64 ts = 1;
 
   // Term of the leader that wrote this entry.
