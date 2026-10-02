@@ -19,12 +19,11 @@ service ChangeStreamService {
   // Omit resume_token (or set all fields to zero) to start from the oldest
   // retained entry.
   //
-  // The log is held for a stream only while it is connected; after a
-  // disconnect it is kept at least for the server's oplog retention period.
-  // A token whose position the log no longer holds is refused with
-  // FAILED_PRECONDITION and ErrorInfo reason RETENTION_LOST (metadata
-  // `requested_index`, `first_retained_index`): the stream never resumes past
-  // a gap.
+  // A stream does not hold the log: entries can be purged once the shard
+  // compacts its log, whether or not a stream still needs them. A token whose
+  // position the log no longer holds is refused with FAILED_PRECONDITION and
+  // ErrorInfo reason RETENTION_LOST (metadata `requested_index`,
+  // `first_retained_index`): the stream never resumes past a gap.
   rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
 }
 
