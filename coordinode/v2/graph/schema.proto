@@ -30,7 +30,9 @@ service SchemaService {
   // List the node labels: every declared label definition, and every label
   // that stored nodes carry without a definition.
   rpc ListLabels(ListLabelsRequest) returns (ListLabelsResponse) {
-    option (google.api.http) = {get: "/v2/graph/schema/labels"};
+    option (google.api.http) = {
+      get: "/v2/graph/schema/labels"
+    };
   }
 
   // Create an edge type definition.
@@ -44,7 +46,9 @@ service SchemaService {
   // List the edge types: every declared edge type definition, and every edge
   // type that stored edges carry without a definition.
   rpc ListEdgeTypes(ListEdgeTypesRequest) returns (ListEdgeTypesResponse) {
-    option (google.api.http) = {get: "/v2/graph/schema/edge-types"};
+    option (google.api.http) = {
+      get: "/v2/graph/schema/edge-types"
+    };
   }
 
   // Create a named constraint. A uniqueness or node-key constraint provisions
@@ -61,12 +65,16 @@ service SchemaService {
   // Drop a named constraint, and the index it owns, in one catalog change.
   // The type definition it constrains is left unchanged.
   rpc DropConstraint(DropConstraintRequest) returns (google.protobuf.Empty) {
-    option (google.api.http) = {delete: "/v2/graph/schema/constraints/{name}"};
+    option (google.api.http) = {
+      delete: "/v2/graph/schema/constraints/{name}"
+    };
   }
 
   // List the named constraints with their state and supporting index.
   rpc ListConstraints(ListConstraintsRequest) returns (ListConstraintsResponse) {
-    option (google.api.http) = {get: "/v2/graph/schema/constraints"};
+    option (google.api.http) = {
+      get: "/v2/graph/schema/constraints"
+    };
   }
 }
 
@@ -250,9 +258,9 @@ message Label {
   // Whether nodes of the label carry a valid-time interval and keep one
   // version per interval start. Fixed when the label is created.
   bool temporal = 6;
-  // Revision of the definition. Advances when the label's write semantics
-  // change (mode, placement, constraints); property additions do not advance
-  // it.
+  // Revision of the definition. Every published change of the definition or
+  // of the label's constraints advances it; a published revision never
+  // changes.
   uint64 schema_revision = 7;
 }
 
