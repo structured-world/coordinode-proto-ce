@@ -5,8 +5,9 @@ package coordinode.v1.replication;
 // CE Change Data Capture: tail a shard's Raft log via gRPC server-side
 // streaming.
 //
-// Client reconnects with a ResumeToken to continue from the last acked
-// position. At-least-once delivery.
+// Client reconnects with a ResumeToken to continue from a position it chose.
+// At-least-once delivery. History is released only up to a position the
+// client acknowledges with AcknowledgeSubscription.
 service ChangeStreamService {
   // Open a long-lived server-side streaming RPC that tails the Raft log.
   //
@@ -33,7 +34,22 @@ service ChangeStreamService {
   // a gap. A registration that has ended is refused with FAILED_PRECONDITION
   // and reason CONSUMER_TERMINATED (metadata `incarnation`, `reason`,
   // `checkpoint`); registering the id again starts a new incarnation.
+  //
+  // Sending an event is not delivery: the registration keeps every entry
+  // from its acknowledged position on, so a stream resumed without a token
+  // starts there and re-sends what the client never acknowledged. A resume
+  // token chooses where reading starts and releases nothing.
   rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
+
+  // State that the client holds, durably, every event of its subscription
+  // before `position`: the registration may stop protecting that history,
+  // and a stream resumed without a token starts at `position`. Only this
+  // call releases history; acknowledging an earlier position than a
+  // previous one changes nothing. Refused with INVALID_ARGUMENT for a
+  // position past what the serving node has applied (nothing that far was
+  // sent) or for another shard, and like CancelSubscription for an ended or
+  // unknown incarnation.
+  rpc AcknowledgeSubscription(AcknowledgeSubscriptionRequest) returns (AcknowledgeSubscriptionResponse);
 
   // End a consumer's registration: it stops holding the log, and its
   // incarnation is refused from then on. Refused with FAILED_PRECONDITION and
@@ -83,6 +99,20 @@ message CancelSubscriptionRequest {
 }
 
 message CancelSubscriptionResponse {}
+
+message AcknowledgeSubscriptionRequest {
+  // The consumer acknowledging.
+  string consumer_id = 1;
+
+  // Its incarnation, from the Subscribe response metadata.
+  uint64 incarnation = 2;
+
+  // The `position` of the last event the client holds durably: everything
+  // before it is acknowledged.
+  ResumeToken position = 3;
+}
+
+message AcknowledgeSubscriptionResponse {}
 
 // Position in a shard's Raft log used to resume after disconnect.
 //
@@ -156,10 +186,13 @@ message ChangeEvent {
   // transfer). Most CDC consumers should skip migration entries.
   bool is_migration = 5;
 
-  // The mutations carried by this log entry.
+  // The mutations carried by this log entry. Empty for an entry that carries
+  // none, and for a progress event: entries up to `position` held nothing
+  // the stream's filters keep, so the client can acknowledge past them.
   repeated ChangeOp ops = 6;
 
-  // Client should persist this token and pass it on reconnect.
+  // Where the stream continues after this event: pass it on reconnect to
+  // resume here, and to AcknowledgeSubscription once the event is held.
   ResumeToken position = 7;
 }
 
