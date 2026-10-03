@@ -1,0 +1,402 @@
+syntax = "proto3";
+
+package coordinode.v2.graph;
+
+import "coordinode/v1/common/types.proto";
+import "coordinode/v1/query/vector.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+// Schema management: node label and edge type definitions, and the named
+// constraints declared over them.
+//
+// A type definition describes an individual record: property types,
+// requiredness, defaults and computed properties. It never declares
+// uniqueness. Uniqueness, node keys and the other constraints are separate
+// named objects, created and dropped through the constraint RPCs, which share
+// one catalog and one admission path with `CREATE CONSTRAINT` / `DROP
+// CONSTRAINT` in Cypher: a constraint created here is the same object a query
+// sees, and the reverse.
+service SchemaService {
+  // Create a node label definition. Creating a type never builds an index
+  // and never declares a constraint.
+  rpc CreateLabel(CreateLabelRequest) returns (Label) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/labels"
+      body: "*"
+    };
+  }
+
+  // List the node labels: every declared label definition, and every label
+  // that stored nodes carry without a definition.
+  rpc ListLabels(ListLabelsRequest) returns (ListLabelsResponse) {
+    option (google.api.http) = {get: "/v2/graph/schema/labels"};
+  }
+
+  // Create an edge type definition.
+  rpc CreateEdgeType(CreateEdgeTypeRequest) returns (EdgeType) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/edge-types"
+      body: "*"
+    };
+  }
+
+  // List the edge types: every declared edge type definition, and every edge
+  // type that stored edges carry without a definition.
+  rpc ListEdgeTypes(ListEdgeTypesRequest) returns (ListEdgeTypesResponse) {
+    option (google.api.http) = {get: "/v2/graph/schema/edge-types"};
+  }
+
+  // Create a named constraint. A uniqueness or node-key constraint provisions
+  // the index that enforces it; the call returns once the constraint is
+  // validated against the stored data, or fails with nothing left behind
+  // when the stored data breaks it.
+  rpc CreateConstraint(CreateConstraintRequest) returns (Constraint) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/constraints"
+      body: "*"
+    };
+  }
+
+  // Drop a named constraint, and the index it owns, in one catalog change.
+  // The type definition it constrains is left unchanged.
+  rpc DropConstraint(DropConstraintRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/v2/graph/schema/constraints/{name}"};
+  }
+
+  // List the named constraints with their state and supporting index.
+  rpc ListConstraints(ListConstraintsRequest) returns (ListConstraintsResponse) {
+    option (google.api.http) = {get: "/v2/graph/schema/constraints"};
+  }
+}
+
+// The scalar property types: types that take no parameters.
+enum ScalarType {
+  // Not a type. Refused when a type is required.
+  SCALAR_TYPE_UNSPECIFIED = 0;
+  // UTF-8 text.
+  SCALAR_TYPE_STRING = 1;
+  // Signed 64-bit integer.
+  SCALAR_TYPE_INT64 = 2;
+  // IEEE 754 binary64 floating point number.
+  SCALAR_TYPE_FLOAT64 = 3;
+  // Boolean.
+  SCALAR_TYPE_BOOL = 4;
+  // Point in time.
+  SCALAR_TYPE_TIMESTAMP = 5;
+  // Large binary object stored apart from the record and read by reference.
+  SCALAR_TYPE_BLOB = 6;
+  // Binary value stored inline in the record.
+  SCALAR_TYPE_BINARY = 7;
+  // Map of string keys to values.
+  SCALAR_TYPE_MAP = 8;
+  // Geographic point or shape.
+  SCALAR_TYPE_GEO = 9;
+  // Arbitrary nested document; its content is not type-checked.
+  SCALAR_TYPE_DOCUMENT = 10;
+}
+
+// A dense vector type.
+message VectorType {
+  // Number of coordinates every value must have, from 1 to 65536. Zero
+  // declares no fixed length: values of any length are accepted, and a vector
+  // index takes its dimensions from its own definition.
+  uint32 dimensions = 1;
+  // Distance metric the property is compared by. UNSPECIFIED means COSINE.
+  coordinode.v1.query.DistanceMetric metric = 2;
+}
+
+// A homogeneous array type.
+message ArrayType {
+  // The type of every element. Required.
+  PropertyType element = 1;
+}
+
+// The declared type of a stored property.
+message PropertyType {
+  // Exactly one is set; a type with none set is refused.
+  oneof type {
+    // A type without parameters.
+    ScalarType scalar = 1;
+    // A dense vector with its dimensions and metric.
+    VectorType vector = 2;
+    // An array of elements of one type.
+    ArrayType array = 3;
+  }
+}
+
+// A stored property of a label or edge type. Carries the type facts of one
+// property only; whether its values are unique is a constraint, listed by
+// ListConstraints.
+message PropertyDefinition {
+  // Property name, unique within the label or edge type. Case-sensitive.
+  string name = 1;
+  // Declared type of the property's values. Required.
+  PropertyType type = 2;
+  // Whether every record must carry a non-null value. A write without one is
+  // refused.
+  bool required = 3;
+  // Value a record reads when it does not carry the property. Unset: no
+  // default, and a missing property reads as null.
+  coordinode.v1.common.PropertyValue default_value = 4;
+}
+
+// The kind of COMPUTED property.
+enum ComputedType {
+  // Not a kind. Refused.
+  COMPUTED_TYPE_UNSPECIFIED = 0;
+  // The node, or part of it, is deleted once duration_secs has elapsed since
+  // the anchor_field timestamp; `scope` says which part.
+  COMPUTED_TYPE_TTL = 1;
+  // Value interpolated from `initial` to `target` over duration_secs,
+  // evaluated when read: initial + (target - initial) * formula(elapsed).
+  COMPUTED_TYPE_DECAY = 2;
+  // Multiplier in [0, 1] that a vector similarity score is scaled by when
+  // read, from the formula over the time elapsed since anchor_field.
+  COMPUTED_TYPE_VECTOR_DECAY = 3;
+}
+
+// Decay formula of a DECAY or VECTOR_DECAY computed property. Every formula
+// maps normalized time t in [0, 1] to a weight in [0, 1].
+enum DecayFormulaType {
+  // LINEAR.
+  DECAY_FORMULA_TYPE_UNSPECIFIED = 0;
+  // f(t) = max(0, 1 - t): constant rate, zero at the end of the duration.
+  DECAY_FORMULA_TYPE_LINEAR = 1;
+  // f(t) = e^(-lambda * t). Requires `lambda`.
+  DECAY_FORMULA_TYPE_EXPONENTIAL = 2;
+  // f(t) = (1 + t / tau)^(-alpha): fast early decay with a long tail.
+  // Requires `tau` and `alpha`.
+  DECAY_FORMULA_TYPE_POWER_LAW = 3;
+  // f(t) = 1 while t < 1, then 0.
+  DECAY_FORMULA_TYPE_STEP = 4;
+}
+
+// What a TTL computed property deletes when it expires.
+enum TtlScopeType {
+  // NODE.
+  TTL_SCOPE_TYPE_UNSPECIFIED = 0;
+  // Only the anchor_field property; the node remains.
+  TTL_SCOPE_TYPE_FIELD = 1;
+  // Only the DOCUMENT property named by target_field; the anchor_field
+  // timestamp remains.
+  TTL_SCOPE_TYPE_SUBTREE = 2;
+  // The whole node with all its edges.
+  TTL_SCOPE_TYPE_NODE = 3;
+}
+
+// A COMPUTED property of a label: evaluated from each node's data, stored
+// once in the label definition and never per node. Read-only; a write to it
+// is refused.
+message ComputedPropertyDefinition {
+  // Property name, unique within the label and distinct from every stored
+  // property name.
+  string name = 1;
+  // Kind of computed property. Required.
+  ComputedType computed_type = 2;
+  // Decay formula, for DECAY and VECTOR_DECAY. Ignored for TTL.
+  DecayFormulaType formula_type = 3;
+  // EXPONENTIAL rate, lambda = ln(2) / half_life_fraction, where
+  // half_life_fraction is the half-life as a fraction of duration_secs.
+  double lambda = 4;
+  // POWER_LAW time scale as a fraction of the duration, greater than 0.
+  double tau = 5;
+  // POWER_LAW exponent, greater than 0.
+  double alpha = 6;
+  // DECAY value at elapsed = 0.
+  double initial = 7;
+  // DECAY value once elapsed >= duration_secs.
+  double target = 8;
+  // Length of the decay, or the TTL, in seconds. Greater than 0.
+  uint64 duration_secs = 9;
+  // Name of the TIMESTAMP property elapsed time is measured from. Required;
+  // must be a stored TIMESTAMP property of the same label.
+  string anchor_field = 10;
+  // TTL only: what expiry deletes.
+  TtlScopeType scope = 11;
+  // TTL with scope SUBTREE only: the DOCUMENT property expiry deletes. Empty
+  // otherwise.
+  string target_field = 12;
+}
+
+// How a label validates and stores the properties of its nodes.
+enum SchemaMode {
+  // STRICT.
+  SCHEMA_MODE_UNSPECIFIED = 0;
+  // Only declared properties are accepted; a write with any other is refused.
+  // Property names are interned, the most compact form.
+  SCHEMA_MODE_STRICT = 1;
+  // Declared properties are type-checked and interned; other properties are
+  // accepted unchecked and stored by name.
+  SCHEMA_MODE_VALIDATED = 2;
+  // No property is checked against the definition beyond requiredness and
+  // defaults; every property is stored by name.
+  SCHEMA_MODE_FLEXIBLE = 3;
+}
+
+// A node label as the catalog holds it.
+message Label {
+  // Label name. Case-sensitive.
+  string name = 1;
+  // False for a label stored nodes carry without a definition; every other
+  // field is then empty.
+  bool declared = 2;
+  // Stored properties, by name.
+  repeated PropertyDefinition properties = 3;
+  // Computed properties, by name.
+  repeated ComputedPropertyDefinition computed_properties = 4;
+  // How the label validates and stores properties.
+  SchemaMode schema_mode = 5;
+  // Whether nodes of the label carry a valid-time interval and keep one
+  // version per interval start. Fixed when the label is created.
+  bool temporal = 6;
+  // Revision of the definition. Advances when the label's write semantics
+  // change (mode, placement, constraints); property additions do not advance
+  // it.
+  uint64 schema_revision = 7;
+}
+
+// An edge type as the catalog holds it.
+message EdgeType {
+  // Edge type name. Case-sensitive.
+  string name = 1;
+  // False for an edge type stored edges carry without a definition; every
+  // other field is then empty.
+  bool declared = 2;
+  // Stored properties, by name.
+  repeated PropertyDefinition properties = 3;
+  // Whether edges of the type carry a valid-time interval.
+  bool temporal = 4;
+  // Revision of the definition. See `Label.schema_revision`.
+  uint64 schema_revision = 5;
+}
+
+message CreateLabelRequest {
+  // Label name, for example "User". Case-sensitive. A label that already has
+  // a definition is refused.
+  string name = 1;
+  // Stored properties. Names are unique within the request.
+  repeated PropertyDefinition properties = 2;
+  // Computed properties. Names are unique and distinct from the stored ones.
+  repeated ComputedPropertyDefinition computed_properties = 3;
+  // How the label validates and stores properties.
+  SchemaMode schema_mode = 4;
+  // Whether nodes of the label are bitemporal. Cannot be changed later.
+  bool temporal = 5;
+}
+
+message ListLabelsRequest {}
+
+message ListLabelsResponse {
+  // Every label, ordered by name.
+  repeated Label labels = 1;
+}
+
+message CreateEdgeTypeRequest {
+  // Edge type name, for example "FOLLOWS". Case-sensitive. An edge type that
+  // already has a definition is refused.
+  string name = 1;
+  // Stored properties. Names are unique within the request.
+  repeated PropertyDefinition properties = 2;
+  // Whether edges of the type are temporal. Cannot be changed later.
+  bool temporal = 3;
+}
+
+message ListEdgeTypesRequest {}
+
+message ListEdgeTypesResponse {
+  // Every edge type, ordered by name.
+  repeated EdgeType edge_types = 1;
+}
+
+// What a constraint requires of the properties it names.
+enum ConstraintKind {
+  // Not a kind. Refused.
+  CONSTRAINT_KIND_UNSPECIFIED = 0;
+  // No two nodes of the label share the values of the properties. A node
+  // missing any of them is not constrained.
+  CONSTRAINT_KIND_UNIQUE = 1;
+  // The one named property is present and not null on every node.
+  CONSTRAINT_KIND_NOT_NULL = 2;
+  // Every named property is present and not null, and no two nodes share
+  // their values.
+  CONSTRAINT_KIND_NODE_KEY = 3;
+  // A present, non-null value of the one named property has the constraint's
+  // property_type.
+  CONSTRAINT_KIND_PROPERTY_TYPE = 4;
+}
+
+// Where a constraint is in its life.
+enum ConstraintState {
+  // Never sent.
+  CONSTRAINT_STATE_UNSPECIFIED = 0;
+  // Enforced on every write while its index is still being checked against
+  // the stored data: the guarantee over data stored before it is not
+  // established yet. A constraint whose creation was interrupted is finished
+  // or withdrawn when the database next opens.
+  CONSTRAINT_STATE_VALIDATING = 1;
+  // Checked against the stored data and enforced on every write.
+  CONSTRAINT_STATE_ACTIVE = 2;
+}
+
+// A named constraint as the catalog holds it.
+message Constraint {
+  // Constraint name, unique in the database.
+  string name = 1;
+  // What the constraint applies to.
+  oneof target {
+    // The nodes whose label is this one.
+    string label = 2;
+  }
+  // The constrained properties, in declaration order; the order is the
+  // column order of the supporting index.
+  repeated string properties = 3;
+  // What the constraint requires.
+  ConstraintKind kind = 4;
+  // The required type, for kind PROPERTY_TYPE; unset for every other kind.
+  PropertyType property_type = 5;
+  // Where the constraint is in its life.
+  ConstraintState state = 6;
+  // Name of the index the constraint owns and is enforced through, for
+  // UNIQUE and NODE_KEY; empty for the kinds checked on each node alone. The
+  // index is dropped with the constraint and cannot be dropped on its own.
+  string backing_index = 7;
+}
+
+message CreateConstraintRequest {
+  // Constraint name, unique in the database. Empty: the server derives one
+  // and returns it.
+  string name = 1;
+  // What the constraint applies to. Required.
+  oneof target {
+    // The label whose nodes are constrained.
+    string label = 2;
+  }
+  // The constrained properties, in order. NOT_NULL and PROPERTY_TYPE take
+  // exactly one; UNIQUE and NODE_KEY take one or more, with no repeats.
+  repeated string properties = 3;
+  // What the constraint requires. Required.
+  ConstraintKind kind = 4;
+  // The required type, for kind PROPERTY_TYPE; must be unset for any other
+  // kind.
+  PropertyType property_type = 5;
+  // When true, a constraint of the same name, or one requiring the same of
+  // the same properties of the same label, already in place makes the call
+  // succeed and return that constraint. When false, either is refused.
+  bool if_not_exists = 6;
+}
+
+message DropConstraintRequest {
+  // Name of the constraint to drop.
+  string name = 1;
+  // When true, a missing constraint makes the call succeed. When false, it is
+  // refused.
+  bool if_exists = 2;
+}
+
+message ListConstraintsRequest {}
+
+message ListConstraintsResponse {
+  // Every constraint, ordered by name.
+  repeated Constraint constraints = 1;
+}
