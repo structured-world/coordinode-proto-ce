@@ -132,6 +132,13 @@ message QueryStats {
   // against. A client that writes and then means to write again
   // conditionally already holds what to state, with no read in between.
   uint64 commit_ts = 9;
+
+  // Set by a member that does not run the version its group runs and so is
+  // read-only: the commit timestamp of the last entry it applied, which this
+  // read reflects and nothing after. Zero for a read served by a member that
+  // runs its group's version. A read that must be current is refused by such
+  // a member instead (FAILED_PRECONDITION, reason MEMBER_READ_ONLY).
+  uint64 read_as_of_ts = 10;
 }
 
 message ExplainCypherRequest {
