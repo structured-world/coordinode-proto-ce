@@ -25,8 +25,8 @@ message HandshakeRecord {
   // little-endian node id (u64), group id (u64), the sender's engine format
   // version (u32) and host format epoch (u64); a presence byte and, when 1,
   // the pair its group runs as far as the sender knows (engine u32, host
-  // epoch u64) with the term (u64) and log index (u64) of the entry that
-  // recorded it; a presence byte and, when 1, the group's leader as far as
+  // epoch u64) with the number of the record that set it (u64, numbered in
+  // log order from 1); a presence byte and, when 1, the group's leader as far as
   // the sender knows: node id (u64), address length (u16) and UTF-8
   // address. Produced and checked by the engine, never by a client.
   bytes record = 1;
