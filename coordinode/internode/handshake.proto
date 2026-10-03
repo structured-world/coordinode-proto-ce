@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package coordinode.internode;
+
+// The version handshake between two members of a consensus group.
+//
+// This file is frozen for the life of the product: its package, service,
+// method and messages never change, so that members of any two releases can
+// tell each other which version they run. Members whose versions differ
+// exchange nothing but this.
+//
+// The same record also travels in the `cn-version-handshake-bin` request
+// and response metadata of every other inter-node call; a call whose record
+// does not match the receiver's version is refused before its payload is
+// read.
+service VersionHandshake {
+  // Exchange version records. Answered whether or not the two members
+  // match; the caller compares the records itself.
+  rpc Exchange(HandshakeRecord) returns (HandshakeRecord);
+}
+
+// One member's version record.
+message HandshakeRecord {
+  // The record in its frozen binary encoding: magic "CNVH", then
+  // little-endian node id (u64), group id (u64), the sender's engine format
+  // version (u32) and host format epoch (u64); a presence byte and, when 1,
+  // the pair its group runs as far as the sender knows (engine u32, host
+  // epoch u64) with the term (u64) and log index (u64) of the entry that
+  // recorded it; a presence byte and, when 1, the group's leader as far as
+  // the sender knows: node id (u64), address length (u16) and UTF-8
+  // address. Produced and checked by the engine, never by a client.
+  bytes record = 1;
+}
