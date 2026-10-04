@@ -4,7 +4,9 @@ package coordinode.v1.session;
 
 import "coordinode/v1/common/types.proto";
 import "coordinode/v1/query/cypher.proto";
+import "coordinode/v1/replication/cdc.proto";
 import "coordinode/v1/replication/consistency.proto";
+import "google/rpc/status.proto";
 
 // Multiplexed bidirectional session.
 //
@@ -13,9 +15,11 @@ import "coordinode/v1/replication/consistency.proto";
 // server executes them concurrently and streams results back as independent
 // cursors, tagged by request id, in completion order rather than send order. An
 // interactive transaction rides the same session as one interleaved sub-thread
-// alongside non-transactional requests. The session is sticky to the serving
-// node for its lifetime. The unary query and transaction RPCs remain the simple
-// default; this stream is their streaming superset.
+// alongside non-transactional requests, and change-stream subscriptions ride it
+// too, delivered in batches within the credit the client grants. The session is
+// sticky to the serving node for its lifetime. The unary query, transaction and
+// change-stream RPCs remain for clients that cannot hold a stream; this stream
+// carries the same messages and is what a driver uses by default.
 service SessionService {
   // Open a session. The client sends a stream of ClientFrames (queries and
   // transaction-control operations); the server returns a stream of
@@ -62,7 +66,51 @@ message ClientFrame {
     // Read, and optionally change, this connection's settings. Answered with
     // a ConnectionStatus carrying the settings now in effect.
     Configure configure = 7;
+    // Open a change-stream subscription on this session. Answered with
+    // Subscribed, then with ChangeEventBatch frames on this request_id as far
+    // as the credit granted reaches.
+    Subscribe subscribe = 8;
+    // Grant a subscription of this session credit for more events.
+    Credit credit = 9;
+    // Acknowledge a subscription's events, with the same meaning as the
+    // change-stream service's AcknowledgeSubscription. Answered with
+    // Acknowledged.
+    coordinode.v1.replication.AcknowledgeSubscriptionRequest acknowledge = 10;
+    // End a consumer's registration, with the same meaning as the
+    // change-stream service's CancelSubscription. Answered with
+    // SubscriptionCancelled; an open subscription of that incarnation on this
+    // session then ends with a CONSUMER_TERMINATED error.
+    coordinode.v1.replication.CancelSubscriptionRequest cancel_subscription = 11;
   }
+}
+
+// Open a change-stream subscription on the session.
+//
+// The registration it reads as lives in the shard's consumer registry, not in
+// the session: closing the session ends only delivery, and the consumer
+// resumes its incarnation from another session or through the change-stream
+// service.
+message Subscribe {
+  // Which consumer to register or resume and where to start, exactly as the
+  // change-stream service's Subscribe takes it.
+  coordinode.v1.replication.SubscribeRequest request = 1;
+
+  // Events the client can take before its first Credit frame. Zero sends
+  // nothing until a Credit arrives.
+  uint32 credit = 2;
+}
+
+// More credit for a subscription of this session: the server sends that many
+// more events on it. Unused credit accumulates; each event sent, a progress
+// event included, uses one. A subscription without credit sends nothing and
+// holds no part of the session's flow-control window, so it never delays the
+// other requests of the session.
+message Credit {
+  // request_id of the Subscribe frame that opened the subscription.
+  uint64 target_request_id = 1;
+
+  // Events added to the subscription's credit. Above zero.
+  uint32 events = 2;
 }
 
 // Read, and optionally change, the settings this connection applies to
@@ -171,8 +219,40 @@ message ServerFrame {
     // see of the cluster, and the settings in effect. Sent in answer to a
     // Configure, and unsolicited whenever the state changes.
     ConnectionStatus connection_status = 8;
+    // Acknowledges Subscribe, carrying the registration's incarnation.
+    Subscribed subscribed = 9;
+    // Events of a subscription, in log order, at most the credit left.
+    ChangeEventBatch change_events = 10;
+    // Acknowledges an acknowledge frame.
+    Acknowledged acknowledged = 11;
+    // Acknowledges a cancel_subscription frame.
+    SubscriptionCancelled subscription_cancelled = 12;
   }
 }
+
+// Acknowledges Subscribe.
+message Subscribed {
+  // Incarnation of the registration the subscription reads as: the one just
+  // registered, or the one resumed. Pass it to acknowledge and
+  // cancel_subscription.
+  uint64 incarnation = 1;
+}
+
+// Change events of one subscription, oldest first, as many as were ready and
+// the credit allowed. Each event carries its own position, as on the
+// change-stream service.
+message ChangeEventBatch {
+  // The events, each as the change-stream service sends it; a progress event
+  // (no ops) lets the client acknowledge past entries its filters dropped.
+  repeated coordinode.v1.replication.ChangeEvent events = 1;
+}
+
+// Acknowledges an acknowledge frame: the registration now holds the history
+// from that position on only.
+message Acknowledged {}
+
+// Acknowledges a cancel_subscription frame: the registration has ended.
+message SubscriptionCancelled {}
 
 // The state of this connection, from the serving node's point of view.
 //
@@ -281,4 +361,11 @@ message SessionError {
   // Human-readable error detail for logs and diagnostics. Not a stable contract;
   // branch on code, not on this string.
   string message = 2;
+
+  // The canonical status for the error, with the same typed details (an
+  // ErrorInfo with its reason and metadata, a RetryInfo) the matching unary or
+  // server-streaming RPC returns in its grpc-status-details-bin trailer. Set
+  // for subscription errors (RETENTION_LOST, CONSUMER_TERMINATED, the
+  // registry's refusals); a client branches on its ErrorInfo reason.
+  google.rpc.Status status = 3;
 }
