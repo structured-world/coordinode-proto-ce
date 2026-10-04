@@ -32,7 +32,18 @@ service RaftService {
 
 // Opaque payload containing msgpack-serialized openraft types.
 message RaftPayload {
+  // The msgpack-serialized consensus message named by the RPC (request on the
+  // way in, response on the way out). Produced and read by the engine only.
   bytes data = 1;
+
+  // The consensus group the message belongs to. A server hosts replicas of
+  // several groups over one connection per peer, and dispatches a request to
+  // its replica of this group; a request for a group the server does not
+  // host is refused with NOT_FOUND. Set by the sender on every request,
+  // including each message of a stream, which must all name the same group.
+  // Must equal the group named by the call's version record. Responses echo
+  // the request's group.
+  uint64 group = 2;
 }
 
 // Empty response for fire-and-forget RPCs.
