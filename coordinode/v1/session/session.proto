@@ -245,6 +245,12 @@ message ChangeEventBatch {
   // The events, each as the change-stream service sends it; a progress event
   // (no ops) lets the client acknowledge past entries its filters dropped.
   repeated coordinode.v1.replication.ChangeEvent events = 1;
+
+  // True when entries the serving node had already applied were waiting past
+  // this batch when it was cut, because the credit ran out: granting more
+  // credit delivers them at once. False when the batch reached everything
+  // applied, so further events come as the node applies them.
+  bool more = 2;
 }
 
 // Acknowledges an acknowledge frame: the registration now holds the history
