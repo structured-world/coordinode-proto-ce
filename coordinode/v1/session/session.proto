@@ -134,6 +134,17 @@ message Configure {
   // Default reorder-buffer drain timeout, in milliseconds, for transactions
   // opened with ORDERING_ORDERED and no explicit drain_timeout_ms.
   optional uint32 drain_timeout_ms = 4;
+
+  // Vector consistency for statements whose query names none in a hint; the
+  // same setting a `SET vector_consistency = '...'` statement on this session
+  // changes. UNSPECIFIED, like absent, leaves the setting as it is.
+  optional coordinode.v1.replication.VectorConsistency vector_consistency = 5;
+
+  // How long statements wait for a vector index still being built, in
+  // milliseconds, when their query names no bound in a hint; the same
+  // setting a `SET vector_build_wait = '...'` statement on this session
+  // changes.
+  optional uint32 vector_build_wait_ms = 6;
 }
 
 // Execute one query statement.

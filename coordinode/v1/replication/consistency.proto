@@ -129,6 +129,24 @@ message ReadConcern {
   uint64 at_timestamp = 3;
 }
 
+// How a vector search treats the read's snapshot: the same modes as the
+// query hint `vector_consistency('...')` and the session command
+// `SET vector_consistency = '...'`. A hint in the query wins over this
+// setting.
+enum VectorConsistency {
+  // Unset: left to the next level down, the session's setting and then the
+  // mode the query's read consistency implies.
+  VECTOR_CONSISTENCY_UNSPECIFIED = 0;
+  // The index's current state with no visibility filter: fastest, best
+  // recall, may include writes newer than the snapshot.
+  VECTOR_CONSISTENCY_CURRENT = 1;
+  // Index candidates filtered by visibility at the snapshot.
+  VECTOR_CONSISTENCY_SNAPSHOT = 2;
+  // Every vector of the label at the snapshot, without the index: exact,
+  // and its cost grows with the label.
+  VECTOR_CONSISTENCY_EXACT = 3;
+}
+
 // Read preference for routing read operations.
 enum ReadPreference {
   READ_PREFERENCE_UNSPECIFIED = 0;

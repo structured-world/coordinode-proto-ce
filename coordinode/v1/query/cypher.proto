@@ -61,23 +61,28 @@ message ExecuteCypherRequest {
   map<string, coordinode.v1.common.PropertyValue> parameters = 2;
 
   // Which cluster node may serve this read.
-  // UNSPECIFIED defaults to PRIMARY (leader-only reads).
+  // UNSPECIFIED takes the server's configured default, PRIMARY (leader-only
+  // reads) unless the operator set another.
   // Use SECONDARY_PREFERRED for read scale-out in 3-node CE cluster.
+  // A value the server does not know is rejected with INVALID_ARGUMENT.
   coordinode.v1.replication.ReadPreference read_preference = 3;
 
   // Data consistency guarantee for this read.
-  // UNSPECIFIED defaults to LOCAL (return whatever this node has applied).
+  // An omitted message or an UNSPECIFIED level takes the server's configured
+  // default, LOCAL (whatever this node has applied) unless the operator set
+  // another.
   // Use MAJORITY for reads that must not see rolled-back data.
   // Use LINEARIZABLE for strictest freshness (leader only, adds ~1 RTT).
+  // A level the server does not know is rejected with INVALID_ARGUMENT.
   coordinode.v1.replication.ReadConcern read_concern = 4;
 
   // Durability guarantee for write statements (CREATE / MERGE / SET / DELETE).
   //
-  // Omitted, or present with `w` unset, defaults to MAJORITY with the write
-  // journaled on each counted member: an acknowledged write survives the loss
-  // of a minority. Ask for a weaker concern explicitly, per request (`acks: 1`,
-  // `acks: 0`, `journal: MEMORY`), for writes that may be lost with their
-  // leader.
+  // Omitted takes the server's configured default; that is MAJORITY with the
+  // write journaled on each counted member unless the operator set another.
+  // Present with `w` unset means MAJORITY. Ask for a weaker concern
+  // explicitly, per request (`acks: 1`, `acks: 0`, `journal: MEMORY`), for
+  // writes that may be lost with their leader.
   //
   // Causal sessions (read_concern.after_index > 0) require write_concern
   // MAJORITY. The server rejects writes with lower durability in causal
@@ -93,6 +98,18 @@ message ExecuteCypherRequest {
   // pinned snapshot and its writes buffer until CommitTransaction. When zero
   // (omitted), the statement auto-commits on its own (the default).
   uint64 transaction_id = 6;
+
+  // Vector consistency of this statement, below a `vector_consistency` hint
+  // in its query. UNSPECIFIED leaves it to the server: the mode the query's
+  // read consistency implies. A node passing a session's statement to the
+  // leader carries the session's setting here.
+  coordinode.v1.replication.VectorConsistency vector_consistency = 7;
+
+  // How long this statement waits for a vector index still being built, in
+  // milliseconds, below a `vector_build_wait` hint in its query. Absent
+  // takes the server's `vector_build_wait_ms`; 0 refuses a building index at
+  // once.
+  optional uint32 vector_build_wait_ms = 8;
 }
 
 message ExecuteCypherResponse {
