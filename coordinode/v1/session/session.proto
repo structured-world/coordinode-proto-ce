@@ -158,6 +158,41 @@ message Execute {
   // ascending nonce order regardless of wire-arrival order. Ignored for
   // autonomous statements and for ORDERING_UNORDERED transactions.
   uint64 nonce = 4;
+
+  // Read concern of this statement alone. Absent, the statement takes the
+  // session's (set by Configure), and a session that set none the server's
+  // configured default. Within the message, a level of
+  // READ_CONCERN_LEVEL_UNSPECIFIED and a zero after_index or at_timestamp
+  // likewise leave that part to the session. Ignored inside a transaction,
+  // whose reads are pinned when it begins.
+  optional coordinode.v1.replication.ReadConcern read_concern = 5;
+
+  // Write concern of this statement alone, resolved like read_concern. A
+  // combination the server cannot honour is refused with INVALID_ARGUMENT.
+  optional coordinode.v1.replication.WriteConcern write_concern = 6;
+
+  // Read preference of this statement alone, resolved like read_concern.
+  optional coordinode.v1.replication.ReadPreference read_preference = 7;
+
+  // Where in the client's code the statement was issued, for the query
+  // advisor: statements are counted per location, and one location issuing
+  // the same statement many times in a row is reported as an N+1 pattern.
+  // The application name and version come from the session's x-source-app
+  // and x-source-version metadata. Absent, the statement is counted without
+  // a location.
+  SourceLocation source = 8;
+}
+
+// A place in the client's source code, sent by a driver in debug mode.
+message SourceLocation {
+  // Source file path as the client knows it.
+  string file = 1;
+
+  // Line number in that file, starting at 1.
+  uint32 line = 2;
+
+  // Enclosing function or method name; empty when the client cannot tell.
+  string function = 3;
 }
 
 // Open an interactive transaction.
