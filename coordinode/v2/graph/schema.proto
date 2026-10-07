@@ -322,6 +322,12 @@ message EdgeType {
   bool temporal = 4;
   // Revision of the definition. See `Label.schema_revision`.
   uint64 schema_revision = 5;
+  // The property whose value, with the edge type and the two endpoints,
+  // identifies one edge: one endpoint pair holds one edge per value. Empty
+  // for a type with at most one edge per endpoint pair. A temporal type that
+  // named none at creation is identified by "valid_from". Fixed when the
+  // type is created.
+  string discriminator = 6;
 }
 
 message CreateLabelRequest {
@@ -353,6 +359,12 @@ message CreateEdgeTypeRequest {
   repeated PropertyDefinition properties = 2;
   // Whether edges of the type are temporal. Cannot be changed later.
   bool temporal = 3;
+  // The declared property that, with the endpoints, identifies one edge, so
+  // one endpoint pair can hold several edges of the type. It must be a NOT
+  // NULL property of type INT64, FLOAT64, BOOL, TIMESTAMP, STRING or BLOB.
+  // Empty: at most one edge per endpoint pair, or, for a temporal type,
+  // edges identified by their "valid_from". Cannot be changed later.
+  string discriminator = 4;
 }
 
 message ListEdgeTypesRequest {}
