@@ -107,8 +107,13 @@ message AcknowledgeSubscriptionRequest {
   // Its incarnation, from the Subscribe response metadata.
   uint64 incarnation = 2;
 
-  // The `position` of the last event the client holds durably: everything
-  // before it is acknowledged.
+  // The `position` of the last event the client no longer needs the source
+  // for: it holds the events durably, or it has durably taken their effect
+  // into the state it keeps (for example by reading the current state at a
+  // snapshot that covers this position). Everything up to it is
+  // acknowledged: the server may release that source for this consumer, a
+  // resume continues after it, and a BOUNDED consumer's progress lag is
+  // measured from it.
   ResumeToken position = 3;
 }
 
