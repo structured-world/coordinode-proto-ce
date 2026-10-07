@@ -5,6 +5,7 @@ package coordinode.v2.graph;
 import "coordinode/v1/common/types.proto";
 import "coordinode/v1/query/vector.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
 
 // Schema management: node label and edge type definitions, and the named
@@ -52,9 +53,14 @@ service SchemaService {
   }
 
   // Create a named constraint. A uniqueness or node-key constraint provisions
-  // the index that enforces it; the call returns once the constraint is
-  // validated against the stored data, or fails with nothing left behind
-  // when the stored data breaks it.
+  // the index that enforces it: the constraint is published VALIDATING and
+  // enforced on every write from then on, and the build validating it against
+  // the stored data is admitted as a server-owned operation. The call waits
+  // for that build up to the request's `wait`. It returns the constraint
+  // ACTIVE once the build published it, or VALIDATING with the build when
+  // the wait ran out first; the build then goes on without the call. Stored
+  // data that breaks the constraint, or a cancellation, within the wait fails
+  // the call with nothing left behind.
   rpc CreateConstraint(CreateConstraintRequest) returns (Constraint) {
     option (google.api.http) = {
       post: "/v2/graph/schema/constraints"
@@ -74,6 +80,36 @@ service SchemaService {
   rpc ListConstraints(ListConstraintsRequest) returns (ListConstraintsResponse) {
     option (google.api.http) = {
       get: "/v2/graph/schema/constraints"
+    };
+  }
+
+  // List the index builds this server knows: every build the catalog
+  // records, with its state and progress.
+  rpc ListIndexBuilds(ListIndexBuildsRequest) returns (ListIndexBuildsResponse) {
+    option (google.api.http) = {
+      get: "/v2/graph/schema/index-builds"
+    };
+  }
+
+  // Inspect one index build, after waiting up to the request's `wait` for its
+  // outcome. Waiting, or giving up waiting, cancels nothing. An operation no
+  // build has fails with NOT_FOUND.
+  rpc GetIndexBuild(GetIndexBuildRequest) returns (IndexBuild) {
+    option (google.api.http) = {
+      get: "/v2/graph/schema/index-builds/{operation}"
+    };
+  }
+
+  // Cancel an index build. The index it was creating is withdrawn, with the
+  // constraint that owns it, in the same catalog change; an index it was
+  // rebuilding is kept, failed, and its constraint keeps holding. A build
+  // that already has an outcome keeps it: a publication that committed first
+  // is never undone. Returns the build as it stands after the call. An
+  // operation no build has fails with NOT_FOUND.
+  rpc CancelIndexBuild(CancelIndexBuildRequest) returns (IndexBuild) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/index-builds/{operation}:cancel"
+      body: "*"
     };
   }
 }
@@ -340,8 +376,9 @@ enum ConstraintState {
   CONSTRAINT_STATE_UNSPECIFIED = 0;
   // Enforced on every write while its index is still being checked against
   // the stored data: the guarantee over data stored before it is not
-  // established yet. A constraint whose creation was interrupted is finished
-  // or withdrawn when the database next opens.
+  // established yet. The check is the index build named in `Constraint.build`;
+  // its outcome makes the constraint ACTIVE or withdraws it. A build a
+  // restart or a change of leader interrupted is taken up again.
   CONSTRAINT_STATE_VALIDATING = 1;
   // Checked against the stored data and enforced on every write.
   CONSTRAINT_STATE_ACTIVE = 2;
@@ -369,6 +406,10 @@ message Constraint {
   // UNIQUE and NODE_KEY; empty for the kinds checked on each node alone. The
   // index is dropped with the constraint and cannot be dropped on its own.
   string backing_index = 7;
+  // The build of the backing index, for UNIQUE and NODE_KEY: while the
+  // constraint is VALIDATING, the operation deciding whether it becomes
+  // ACTIVE. Unset for the kinds checked on each node alone.
+  IndexBuild build = 8;
 }
 
 message CreateConstraintRequest {
@@ -390,8 +431,15 @@ message CreateConstraintRequest {
   PropertyType property_type = 5;
   // When true, a constraint of the same name, or one requiring the same of
   // the same properties of the same label, already in place makes the call
-  // succeed and return that constraint. When false, either is refused.
+  // succeed and return that constraint, VALIDATING with its running build
+  // included: a retry after a lost reply finds the build the first call
+  // admitted rather than admitting a second. When false, either is refused.
   bool if_not_exists = 6;
+  // How long the call waits for the build of the backing index. Unset: the
+  // server's default (`index_build_statement_wait_secs`). Zero: the call
+  // returns once the constraint and its build are admitted. Ignored for the
+  // kinds checked on each node alone, which have no build.
+  google.protobuf.Duration wait = 7;
 }
 
 message DropConstraintRequest {
@@ -407,4 +455,76 @@ message ListConstraintsRequest {}
 message ListConstraintsResponse {
   // Every constraint, ordered by name.
   repeated Constraint constraints = 1;
+}
+
+// Where an index build stands.
+enum IndexBuildState {
+  // Never sent.
+  INDEX_BUILD_STATE_UNSPECIFIED = 0;
+  // Admitted with its index; no executor has taken it yet.
+  INDEX_BUILD_STATE_ACCEPTED = 1;
+  // An executor is filling the index; `phase` says where.
+  INDEX_BUILD_STATE_RUNNING = 2;
+  // The index was published ready, and a constraint owning it made ACTIVE.
+  INDEX_BUILD_STATE_PUBLISHED = 3;
+  // The stored data refused the index; `failure` says why. A new index was
+  // withdrawn with the constraint owning it; a rebuilt one is kept, failed.
+  INDEX_BUILD_STATE_FAILED = 4;
+  // Cancelled before it had an outcome; the same withdrawal as FAILED.
+  INDEX_BUILD_STATE_CANCELLED = 5;
+}
+
+// Where a RUNNING build stands on the executor holding it.
+enum IndexBuildPhase {
+  // Not running on an executor of this server.
+  INDEX_BUILD_PHASE_UNSPECIFIED = 0;
+  // Waiting for a seat: as many builds as the server runs at once
+  // (`index_build_max_running`) are filling indexes.
+  INDEX_BUILD_PHASE_AWAITING_SEAT = 1;
+  // Waiting for the transactions opened before the index existed to end.
+  INDEX_BUILD_PHASE_AWAITING_OLDER_TRANSACTIONS = 2;
+  // Filling the index.
+  INDEX_BUILD_PHASE_INDEXING = 3;
+}
+
+// An index build: the server-owned operation that fills one index and
+// publishes it, independent of the request, connection or member that
+// admitted it.
+message IndexBuild {
+  // Identity of the build, assigned when it is admitted and never reused.
+  // Inspected with GetIndexBuild, cancelled with CancelIndexBuild.
+  uint64 operation = 1;
+  // Name of the index the build fills. Empty once the index is withdrawn.
+  string index = 2;
+  // Label whose nodes the index covers. Empty once the index is withdrawn.
+  string label = 3;
+  // Where the build stands.
+  IndexBuildState state = 4;
+  // Where a RUNNING build stands on the executor of this server holding it;
+  // UNSPECIFIED when none does.
+  IndexBuildPhase phase = 5;
+  // Nodes indexed so far. Progress, not proof of coverage.
+  uint64 indexed = 6;
+  // Why the build failed, for FAILED; empty otherwise.
+  string failure = 7;
+}
+
+message ListIndexBuildsRequest {}
+
+message ListIndexBuildsResponse {
+  // Every build, ordered by operation.
+  repeated IndexBuild builds = 1;
+}
+
+message GetIndexBuildRequest {
+  // The build to inspect.
+  uint64 operation = 1;
+  // How long to wait for the build to reach an outcome before answering.
+  // Unset or zero: answer at once.
+  google.protobuf.Duration wait = 2;
+}
+
+message CancelIndexBuildRequest {
+  // The build to cancel.
+  uint64 operation = 1;
 }
