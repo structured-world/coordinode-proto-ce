@@ -419,6 +419,29 @@ message Constraint {
   // constraint is VALIDATING, the operation deciding whether it becomes
   // ACTIVE. Unset for the kinds checked on each node alone.
   IndexBuild build = 8;
+  // For UNIQUE, the nodes the uniqueness holds among: only nodes the
+  // predicate admits are compared, and the backing index holds only them.
+  // Unset: every node of the label.
+  ConstraintScope scope = 9;
+}
+
+// The predicate that scopes a UNIQUE constraint: a test of one property of
+// a node. A partial unique index (`CREATE UNIQUE INDEX ... WHERE`) declares
+// a uniqueness with its predicate as the scope.
+message ConstraintScope {
+  // The property the predicate tests. Required.
+  string property = 1;
+  // What the property must be for the node to be in scope. Exactly one.
+  oneof test {
+    // The property equals this string.
+    string equals_string = 2;
+    // The property equals this integer.
+    int64 equals_int = 3;
+    // The property equals this boolean.
+    bool equals_bool = 4;
+    // The property is present and not null.
+    google.protobuf.Empty present = 5;
+  }
 }
 
 message CreateConstraintRequest {
@@ -456,6 +479,10 @@ message CreateConstraintRequest {
   // whatever the build's outcome. Empty: the build fails on the first
   // duplicate. Later writes are refused as duplicates as always.
   string on_duplicate_rename = 8;
+  // UNIQUE only: the nodes the uniqueness holds among. Unset: every node of
+  // the label. Two constraints over the same properties with different
+  // scopes are different constraints.
+  ConstraintScope scope = 9;
 }
 
 message DropConstraintRequest {
