@@ -108,7 +108,7 @@ service SchemaService {
   // operation no build has fails with NOT_FOUND.
   rpc CancelIndexBuild(CancelIndexBuildRequest) returns (IndexBuild) {
     option (google.api.http) = {
-      post: "/v2/graph/schema/index-builds/{operation}:cancel"
+      post: "/v2/graph/schema/index-builds/{operation}/cancel"
       body: "*"
     };
   }
