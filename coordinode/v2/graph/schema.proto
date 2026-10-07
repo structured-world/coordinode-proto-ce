@@ -112,6 +112,15 @@ service SchemaService {
       body: "*"
     };
   }
+
+  // List the duplicates a build with ON DUPLICATE RENAME repaired: the
+  // node, the property and the value replaced by which. An operation no
+  // build has fails with NOT_FOUND.
+  rpc ListIndexBuildRepairs(ListIndexBuildRepairsRequest) returns (ListIndexBuildRepairsResponse) {
+    option (google.api.http) = {
+      get: "/v2/graph/schema/index-builds/{operation}/repairs"
+    };
+  }
 }
 
 // The scalar property types: types that take no parameters.
@@ -440,6 +449,13 @@ message CreateConstraintRequest {
   // returns once the constraint and its build are admitted. Ignored for the
   // kinds checked on each node alone, which have no build.
   google.protobuf.Duration wait = 7;
+  // UNIQUE and NODE_KEY only: a string property among `properties` the build
+  // may change to end a duplicate it finds in the stored data, by appending
+  // a random suffix to one holder's value (`ON DUPLICATE RENAME`). Each
+  // repair commits as its own transaction, is visible at once, and is kept
+  // whatever the build's outcome. Empty: the build fails on the first
+  // duplicate. Later writes are refused as duplicates as always.
+  string on_duplicate_rename = 8;
 }
 
 message DropConstraintRequest {
@@ -507,6 +523,37 @@ message IndexBuild {
   uint64 indexed = 6;
   // Why the build failed, for FAILED; empty otherwise.
   string failure = 7;
+  // The property the build may change to repair a duplicate; empty for a
+  // build that fails on the first one.
+  string rename_property = 8;
+  // Repairs the build has committed so far. Each changed a node's value
+  // and is listed by ListIndexBuildRepairs; none is undone by a cancellation
+  // or a failure of the build.
+  uint64 repaired = 9;
+}
+
+// One duplicate a build repaired: the value of `property` it replaced on a
+// node.
+message IndexBuildRepair {
+  // The node it changed, as an element id.
+  string element_id = 1;
+  // The property it changed.
+  string property = 2;
+  // The value the node held, which another node held too.
+  string old_value = 3;
+  // The value the node holds since the repair.
+  string new_value = 4;
+}
+
+message ListIndexBuildRepairsRequest {
+  // The build whose repairs to list. Required: an absent operation is
+  // refused, never read as operation 0.
+  optional uint64 operation = 1;
+}
+
+message ListIndexBuildRepairsResponse {
+  // Every repair the build committed, ordered by node.
+  repeated IndexBuildRepair repairs = 1;
 }
 
 message ListIndexBuildsRequest {}
