@@ -517,14 +517,16 @@ message ListIndexBuildsResponse {
 }
 
 message GetIndexBuildRequest {
-  // The build to inspect.
-  uint64 operation = 1;
+  // The build to inspect. Required: an absent operation is refused, never
+  // read as operation 0.
+  optional uint64 operation = 1;
   // How long to wait for the build to reach an outcome before answering.
   // Unset or zero: answer at once.
   google.protobuf.Duration wait = 2;
 }
 
 message CancelIndexBuildRequest {
-  // The build to cancel.
-  uint64 operation = 1;
+  // The build to cancel. Required: an absent operation is refused, never
+  // read as operation 0.
+  optional uint64 operation = 1;
 }
