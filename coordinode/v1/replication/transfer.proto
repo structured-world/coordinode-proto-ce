@@ -61,6 +61,14 @@ message SegmentDescriptorRef {
   // zstd effort when `encoding` = 2, as the `ZstdLevel` discriminant
   // (0 = fastest, 1 = default, 2 = better). Ignored otherwise.
   uint32 zstd_level = 7;
+
+  // When set, the segment is the retained history of this index generation
+  // (`GenerationId`) in the index partition, not the partition's current rows:
+  // every version the serving peer still holds, with its commit timestamp and
+  // its point and range deletions, in logical keys, plus the log position the
+  // history is complete below. The key range fields are then ignored. A
+  // receiver fills a local replacement copy of the generation from it.
+  optional uint64 generation = 8;
 }
 
 // Request a segment's transfer manifest from a peer.
