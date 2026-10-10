@@ -145,6 +145,12 @@ message Configure {
   // setting a `SET vector_build_wait = '...'` statement on this session
   // changes.
   optional uint32 vector_build_wait_ms = 6;
+
+  // Memory limit of each statement, in MiB, when the statement names none;
+  // the same setting a `SET query_memory_limit_mb = N` statement on this
+  // session changes. Zero or a value past the administrative ceiling
+  // (4096 MiB) is rejected and changes nothing.
+  optional uint32 query_memory_limit_mb = 7;
 }
 
 // Execute one query statement.

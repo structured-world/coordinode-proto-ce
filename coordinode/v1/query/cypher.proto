@@ -110,6 +110,16 @@ message ExecuteCypherRequest {
   // takes the server's `vector_build_wait_ms`; 0 refuses a building index at
   // once.
   optional uint32 vector_build_wait_ms = 8;
+
+  // Memory limit of this statement, in MiB: what its operators, access paths
+  // and buffered results may hold at once. Absent takes the server's
+  // `query_memory_limit_mb`. Zero or a value past the administrative ceiling
+  // (4096 MiB) is rejected with INVALID_ARGUMENT. A statement that needs more
+  // fails with RESOURCE_EXHAUSTED, reason EXCEEDS_MEMORY_BUDGET, and returns
+  // no partial result. A node passing a session's statement to the leader
+  // carries the session's setting here. The statement's deadline is the
+  // call's gRPC deadline.
+  optional uint32 query_memory_limit_mb = 9;
 }
 
 message ExecuteCypherResponse {
