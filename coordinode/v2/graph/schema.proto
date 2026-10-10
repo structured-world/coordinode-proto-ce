@@ -121,6 +121,58 @@ service SchemaService {
       get: "/v2/graph/schema/index-builds/{operation}/repairs"
     };
   }
+
+  // Start a check of a B-tree index against the records it is derived
+  // from, in the background, repairing the entries that disagree. Returns
+  // the check as admitted; a check already running for the index's
+  // generation is returned as it is. An index that does not exist fails
+  // with NOT_FOUND; one that is not a ready B-tree index, or a server that
+  // takes no writes (the leader runs checks), with FAILED_PRECONDITION.
+  rpc CheckIndex(CheckIndexRequest) returns (IndexCheck) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/index-checks"
+      body: "*"
+    };
+  }
+
+  // List every index generation's integrity and its latest check.
+  rpc ListIndexChecks(ListIndexChecksRequest) returns (ListIndexChecksResponse) {
+    option (google.api.http) = {
+      get: "/v2/graph/schema/index-checks"
+    };
+  }
+
+  // Inspect one check, after waiting up to the request's `wait` for its
+  // outcome. Waiting cancels nothing. An operation no check has fails with
+  // NOT_FOUND.
+  rpc GetIndexCheck(GetIndexCheckRequest) returns (IndexCheck) {
+    option (google.api.http) = {
+      get: "/v2/graph/schema/index-checks/{operation}"
+    };
+  }
+
+  // Cancel a check. Repairs it already committed stay. Returns the check as
+  // it stands after the call. An operation no check has fails with
+  // NOT_FOUND.
+  rpc CancelIndexCheck(CancelIndexCheckRequest) returns (IndexCheck) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/index-checks/{operation}/cancel"
+      body: "*"
+    };
+  }
+
+  // Rebuild a B-tree index from its records into a fresh generation of the
+  // same index, and wait up to the request's `wait` for the build. Writers
+  // maintain the new generation at once; a constraint the index enforces
+  // stays enforced. Returns the build, which GetIndexBuild inspects. An
+  // index that does not exist fails with NOT_FOUND; one that is not a
+  // B-tree index with FAILED_PRECONDITION.
+  rpc Reindex(ReindexRequest) returns (IndexBuild) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/index-rebuilds"
+      body: "*"
+    };
+  }
 }
 
 // The scalar property types: types that take no parameters.
@@ -615,4 +667,137 @@ message CancelIndexBuildRequest {
   // The build to cancel. Required: an absent operation is refused, never
   // read as operation 0.
   optional uint64 operation = 1;
+}
+
+// What is known about whether an index generation's entries agree with the
+// records they are derived from. Separate from its build state.
+enum IndexIntegrity {
+  // Never sent.
+  INDEX_INTEGRITY_UNSPECIFIED = 0;
+  // Nothing was found wrong and no check has completed: the index serves as
+  // its build state says.
+  INDEX_INTEGRITY_UNCHECKED = 1;
+  // An entry was found disagreeing with its record. Lookups in the index
+  // answer from the records, and its unique values are proved free from
+  // them, until a check verifies or rebuilds it.
+  INDEX_INTEGRITY_SUSPECT = 2;
+  // A complete check found every entry and every record in agreement.
+  INDEX_INTEGRITY_VERIFIED = 3;
+}
+
+// Where an index check stands.
+enum IndexCheckState {
+  // Never sent.
+  INDEX_CHECK_STATE_UNSPECIFIED = 0;
+  // Admitted; no executor has taken it yet.
+  INDEX_CHECK_STATE_ACCEPTED = 1;
+  // An executor is checking; `phase` says which half.
+  INDEX_CHECK_STATE_RUNNING = 2;
+  // The check reached its end; `integrity` says what it found.
+  INDEX_CHECK_STATE_DONE = 3;
+  // The check could not finish; `failure` says why.
+  INDEX_CHECK_STATE_FAILED = 4;
+  // Cancelled before its end. Repairs it committed stay.
+  INDEX_CHECK_STATE_CANCELLED = 5;
+}
+
+// Which half of a check is running.
+enum IndexCheckPhase {
+  // Never sent.
+  INDEX_CHECK_PHASE_UNSPECIFIED = 0;
+  // Every record of the label, checked for the entries its values give it.
+  INDEX_CHECK_PHASE_RECORDS = 1;
+  // Every entry of the generation, checked for a record holding its value.
+  INDEX_CHECK_PHASE_ENTRIES = 2;
+}
+
+// One index generation's integrity and its latest check: the server-owned
+// operation that compares an index with its records, repairs the entries
+// that disagree, and rebuilds the index when the damage is too wide.
+message IndexCheck {
+  // Identity of the check: the generation it checks. Inspected with
+  // GetIndexCheck, cancelled with CancelIndexCheck.
+  uint64 operation = 1;
+  // Identity of the logical index checked.
+  uint64 index_id = 2;
+  // Name of the index, empty for an unnamed or dropped index.
+  string index = 3;
+  // Label whose nodes the index covers, empty once it is dropped.
+  string label = 4;
+  // What is known about the generation.
+  IndexIntegrity integrity = 5;
+  // Where the latest check stands; UNSPECIFIED when none was admitted.
+  IndexCheckState state = 6;
+  // Which half a check is in; UNSPECIFIED when none was admitted.
+  IndexCheckPhase phase = 7;
+  // Complete passes over both halves so far.
+  uint32 passes = 8;
+  // Records and entries checked so far. Progress, not proof: only VERIFIED
+  // is.
+  uint64 checked = 9;
+  // Disagreements found so far.
+  uint64 mismatches = 10;
+  // Disagreements repaired so far.
+  uint64 repaired = 11;
+  // Pairs of records that hold one value of a unique index: no entry can
+  // represent them, and no check changes a record.
+  repeated IndexSourceConflict conflicts = 12;
+  // The generation a rebuild fills, when the damage was too wide to repair
+  // entry by entry. Unset otherwise.
+  optional uint64 rebuilt_into = 13;
+  // Why the check failed, for FAILED; empty otherwise.
+  string failure = 14;
+}
+
+// Two records holding one value of a unique index.
+message IndexSourceConflict {
+  // The nodes holding the value, as element ids.
+  repeated string element_ids = 1;
+}
+
+message CheckIndexRequest {
+  // The index to check. Required.
+  oneof index {
+    // The index's identity.
+    uint64 index_id = 1;
+    // The name bound to the index now. A name that looks like a number is
+    // a name.
+    string index_name = 2;
+  }
+}
+
+message ListIndexChecksRequest {}
+
+message ListIndexChecksResponse {
+  // Every generation with an integrity record, ordered by operation.
+  repeated IndexCheck checks = 1;
+}
+
+message GetIndexCheckRequest {
+  // The check to inspect. Required: an absent operation is refused, never
+  // read as operation 0.
+  optional uint64 operation = 1;
+  // How long to wait for the check to reach an outcome before answering.
+  // Unset or zero: answer at once.
+  google.protobuf.Duration wait = 2;
+}
+
+message CancelIndexCheckRequest {
+  // The check to cancel. Required: an absent operation is refused, never
+  // read as operation 0.
+  optional uint64 operation = 1;
+}
+
+message ReindexRequest {
+  // The index to rebuild. Required.
+  oneof index {
+    // The index's identity.
+    uint64 index_id = 1;
+    // The name bound to the index now. A name that looks like a number is
+    // a name.
+    string index_name = 2;
+  }
+  // How long to wait for the build before answering; the build goes on
+  // either way. Unset or zero: answer once it is admitted.
+  google.protobuf.Duration wait = 3;
 }
