@@ -91,6 +91,10 @@ message ClusterStatus {
   string leader_id = 2;
   // Current Raft term. Monotonically increasing across leader elections.
   uint64 raft_term = 3;
+  // The deployment's identity, 32 hexadecimal digits, chosen when its first
+  // member was formed. A node joining the deployment is configured with it.
+  // Empty on a member that has not learned it yet.
+  string deployment = 4;
 }
 
 message ClusterNode {
@@ -103,6 +107,9 @@ message ClusterNode {
   // Number of Raft log entries this node is behind the leader.
   // Zero for the leader itself. Used for read routing staleness checks.
   uint64 lag_entries = 5;
+  // The node identity the member is bound to (its SPIFFE ID under the
+  // built-in profile). Empty when the membership records none.
+  string node_identity = 6;
 }
 
 enum NodeRole {
@@ -137,6 +144,13 @@ message JoinNodeRequest {
   // Used as a hint: the leader logs "Tier 3 skip expected" in the initial
   // progress event. Actual Tier-3 skip behavior runs on the joining node side.
   bool pre_seeded = 3;
+  // The node identity the new node proves on the inter-node channel: its
+  // SPIFFE ID (spiffe://trust-domain/path, compared whole). Required. The
+  // member is bound to it in the membership, so the leader dials the address
+  // expecting this identity and every member admits the node only under it.
+  // An identity that already left the deployment is refused: a returning
+  // node joins under a new one.
+  string node_identity = 4;
 }
 
 // Response to JoinNode — the join lifecycle has been initiated.

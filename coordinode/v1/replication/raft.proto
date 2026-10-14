@@ -28,6 +28,15 @@ service RaftService {
 
   // Leadership transfer (unary).
   rpc TransferLeader(RaftPayload) returns (RaftEmpty);
+
+  // The group's members as the answering member knows them, asked by a
+  // member that is refusing a peer it does not know yet: a member that
+  // missed a membership change, or one still joining. Only a member of the
+  // group is answered, and the asker takes the answer only from a member it
+  // already knows, so no one becomes a member by asking.
+  // Payload: empty → msgpack(the deployment, the log index of the
+  // membership and every member's node id, address, node identity and role)
+  rpc Members(RaftPayload) returns (RaftPayload);
 }
 
 // Opaque payload containing msgpack-serialized openraft types.
