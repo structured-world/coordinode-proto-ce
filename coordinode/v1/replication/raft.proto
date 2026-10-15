@@ -12,6 +12,14 @@ service RaftService {
   // Payload: msgpack(VoteRequest) → msgpack(VoteResponse)
   rpc Vote(RaftPayload) returns (RaftPayload);
 
+  // Pre-vote (unary): whether the receiver would grant a vote at the next
+  // term, asked before a candidate raises its term. Nothing is persisted and
+  // the receiver's term does not change, so a member cut off from its leader
+  // learns it cannot win instead of returning with an inflated term that
+  // deposes a healthy leader.
+  // Payload: msgpack(VoteRequest) → msgpack(VoteResponse)
+  rpc PreVote(RaftPayload) returns (RaftPayload);
+
   // Log replication (unary, single batch).
   // Used as fallback when streaming is not available.
   // Payload: msgpack(AppendEntriesRequest) → msgpack(AppendEntriesResponse)
