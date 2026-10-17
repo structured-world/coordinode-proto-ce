@@ -4,6 +4,7 @@ package coordinode.v1.graph;
 
 import "coordinode/v1/common/types.proto";
 import "coordinode/v1/common/pagination.proto";
+import "coordinode/v1/operation/operation.proto";
 import "google/api/annotations.proto";
 
 // Core graph CRUD operations.
@@ -94,6 +95,14 @@ message Edge {
 message CreateNodeRequest {
   repeated string labels = 1;
   map<string, coordinode.v1.common.PropertyValue> properties = 2;
+
+  // The client operation this creation carries out: the node is created at
+  // most once however the call is retried, and a retry of a creation that
+  // already took effect creates nothing and is refused with
+  // FAILED_PRECONDITION, reason OPERATION_SETTLED, naming its outcome. Absent
+  // creates unbound. On an entry of CreateNodesBatchRequest it is refused
+  // with INVALID_ARGUMENT: the batch names its operation.
+  coordinode.v1.operation.OperationRef operation = 3;
 }
 
 // Bulk-create N nodes in one transaction. Same shape as N back-to-back
@@ -107,6 +116,10 @@ message CreateNodesBatchRequest {
   // nodes in the same order via CreateNodesBatchResponse.nodes.
   // An empty list is a valid no-op and returns an empty response.
   repeated CreateNodeRequest nodes = 1;
+
+  // The client operation the whole batch carries out: the batch takes effect
+  // at most once however the call is retried; see CreateNodeRequest.operation.
+  coordinode.v1.operation.OperationRef operation = 2;
 }
 
 message CreateNodesBatchResponse {
@@ -124,6 +137,10 @@ message CreateEdgeRequest {
   uint64 source_node_id = 2;
   uint64 target_node_id = 3;
   map<string, coordinode.v1.common.PropertyValue> properties = 4;
+
+  // The client operation this creation carries out: the edge is created at
+  // most once however the call is retried; see CreateNodeRequest.operation.
+  coordinode.v1.operation.OperationRef operation = 5;
 }
 
 message TraverseRequest {

@@ -1,0 +1,210 @@
+syntax = "proto3";
+
+package coordinode.v1.operation;
+
+import "google/api/annotations.proto";
+
+// Client operation identity: number a client's writes so that each takes
+// effect at most once however it is retried, and find out after a lost reply,
+// a reconnect, a restart of the client or a change of leader how a write
+// stands, without running it again.
+//
+// A logical client (an issuer) is enrolled once per incarnation and numbers
+// its writes itself, without a round trip per write. A write that carries an
+// OperationRef (ExecuteCypherRequest.operation, CommitTransactionRequest
+// .operation, session Execute.operation and Commit.operation) takes effect at
+// most once: a retry of a write that already took effect runs nothing and is
+// refused with FAILED_PRECONDITION, reason OPERATION_SETTLED, naming its
+// outcome. A client that must survive its own crash persists the reference
+// before it sends the write.
+service OperationService {
+  // Enroll a new incarnation of an issuer, closing every earlier one: a
+  // closed incarnation admits no new write, and what it admitted stays
+  // resolvable. A client enrolls when it starts a logical client for the
+  // first time or cannot restore its allocation.
+  rpc EnrollIssuer(EnrollIssuerRequest) returns (EnrollIssuerResponse) {
+    option (google.api.http) = {
+      post: "/v1/operation/issuer/enroll"
+      body: "*"
+    };
+  }
+
+  // Resume an incarnation after a client restart, numbering from what the
+  // client persisted. Refused with FAILED_PRECONDITION when the incarnation
+  // is closed or was never enrolled here: the client then enrolls a new one.
+  rpc ResumeIssuer(ResumeIssuerRequest) returns (ResumeIssuerResponse) {
+    option (google.api.http) = {
+      post: "/v1/operation/issuer/resume"
+      body: "*"
+    };
+  }
+
+  // How an operation stands, optionally proving that one with no committed
+  // attempt never takes effect.
+  rpc ResolveOperation(ResolveOperationRequest) returns (ResolveOperationResponse) {
+    option (google.api.http) = {
+      post: "/v1/operation/resolve"
+      body: "*"
+    };
+  }
+
+  // Release the outcomes of operations the client no longer needs, out of
+  // number order: each settled one then reads as retired and admits nothing.
+  // An operation still owed its outcome, or a number nothing is recorded of,
+  // is left as it is.
+  rpc AcknowledgeOperations(AcknowledgeOperationsRequest) returns (AcknowledgeOperationsResponse) {
+    option (google.api.http) = {
+      post: "/v1/operation/acknowledge"
+      body: "*"
+    };
+  }
+
+  // Retire an incarnation's numbers below a bound, up to the first one still
+  // owed its outcome: their records are released and the numbers, used or
+  // not, admit nothing again.
+  rpc RetireOperations(RetireOperationsRequest) returns (RetireOperationsResponse) {
+    option (google.api.http) = {
+      post: "/v1/operation/retire"
+      body: "*"
+    };
+  }
+}
+
+// A reference to one client operation: what a client persists before sending
+// a write and sends again with every retry of it, on any connection and to
+// any member.
+message OperationRef {
+  // The logical client: 16 bytes the client chooses once and keeps across its
+  // restarts (a random value, or a digest of a stable application identity).
+  // Independent clients use different issuers; a connection, session or
+  // server is not an issuer.
+  bytes issuer = 1;
+
+  // The issuer's incarnation the number belongs to, from EnrollIssuerResponse.
+  uint64 incarnation = 2;
+
+  // The operation's number within the incarnation, allocated by the client:
+  // starting at EnrollIssuerResponse.next_sequence, each new write takes the
+  // next number, and a retry of a write keeps its number. Numbers are an
+  // identity, not an execution order: writes with different numbers may run
+  // concurrently and complete in any order.
+  uint64 sequence = 3;
+
+  // The deployment that enrolled the incarnation, 16 bytes, from
+  // EnrollIssuerResponse.deployment. A server of another deployment refuses
+  // the reference with INVALID_ARGUMENT, reason FOREIGN_OPERATION, rather
+  // than admit it as a new operation.
+  bytes deployment = 4;
+}
+
+message EnrollIssuerRequest {
+  // The logical client to enroll, 16 bytes; see OperationRef.issuer.
+  bytes issuer = 1;
+}
+
+message EnrollIssuerResponse {
+  // The incarnation opened; every earlier incarnation of the issuer is closed.
+  uint64 incarnation = 1;
+
+  // The first number the client allocates in this incarnation.
+  uint64 next_sequence = 2;
+
+  // The deployment the incarnation belongs to, 16 bytes, carried in every
+  // OperationRef of the incarnation.
+  bytes deployment = 3;
+}
+
+message ResumeIssuerRequest {
+  // The logical client, 16 bytes.
+  bytes issuer = 1;
+
+  // The incarnation the client numbered in before it restarted.
+  uint64 incarnation = 2;
+
+  // The next number the client persisted before it restarted.
+  uint64 next_sequence = 3;
+}
+
+message ResumeIssuerResponse {
+  // The number to continue from: the persisted one, or the incarnation's
+  // retired prefix when that is higher.
+  uint64 next_sequence = 1;
+
+  // The deployment the incarnation belongs to, 16 bytes.
+  bytes deployment = 2;
+}
+
+message ResolveOperationRequest {
+  // The operation to resolve.
+  OperationRef operation = 1;
+
+  // When true, an operation no attempt has committed (nothing recorded, or a
+  // provisional write admitted and not yet drained) is excluded through the
+  // log first, so the answer is final: COMMITTED, or ABORTED and never taking
+  // effect. The proof a client needs before it gives the operation up or
+  // runs the work again under a new reference. Decided by the group's log,
+  // and refused on a member that is not the leader (FAILED_PRECONDITION,
+  // reason NOT_LEADER). When false, reports what this member has applied.
+  bool exclude = 2;
+}
+
+// Where a client operation stands.
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  // An attempt of it committed; nothing else of it ever takes effect.
+  OPERATION_STATE_COMMITTED = 1;
+  // It is proven never to take effect: excluded before any attempt committed
+  // it, or its incarnation closed with nothing recorded of it.
+  OPERATION_STATE_ABORTED = 2;
+  // A provisional write (memory or cache journal) of it is admitted and its
+  // effects are not committed yet; no other attempt of it takes effect.
+  OPERATION_STATE_ADMITTED = 3;
+  // Nothing is recorded of it: an attempt may still be on its way. Not proof
+  // that it was never sent; resolving with exclude gives one.
+  OPERATION_STATE_UNKNOWN = 4;
+  // Its outcome was released (acknowledged or retired): it is settled, its
+  // outcome is no longer known, and no attempt of it is admitted again.
+  OPERATION_STATE_RETIRED = 5;
+}
+
+message ResolveOperationResponse {
+  // Where the operation stands.
+  OperationState state = 1;
+
+  // The commit timestamp of the committed attempt, for COMMITTED; zero
+  // otherwise. The same number a write's QueryStats.commit_ts reports.
+  uint64 commit_ts = 2;
+}
+
+message AcknowledgeOperationsRequest {
+  // The logical client, 16 bytes.
+  bytes issuer = 1;
+
+  // The incarnation the numbers belong to.
+  uint64 incarnation = 2;
+
+  // The numbers whose outcomes the client no longer needs, in any order.
+  repeated uint64 sequences = 3;
+
+  // The deployment of the incarnation, 16 bytes; see OperationRef.deployment.
+  bytes deployment = 4;
+}
+
+message AcknowledgeOperationsResponse {}
+
+message RetireOperationsRequest {
+  // The logical client, 16 bytes.
+  bytes issuer = 1;
+
+  // The incarnation whose numbers to retire.
+  uint64 incarnation = 2;
+
+  // The first number not to retire: every number below it, up to the first
+  // one still owed its outcome, is retired.
+  uint64 below = 3;
+
+  // The deployment of the incarnation, 16 bytes; see OperationRef.deployment.
+  bytes deployment = 4;
+}
+
+message RetireOperationsResponse {}

@@ -3,6 +3,7 @@ syntax = "proto3";
 package coordinode.v1.session;
 
 import "coordinode/v1/common/types.proto";
+import "coordinode/v1/operation/operation.proto";
 import "coordinode/v1/query/cypher.proto";
 import "coordinode/v1/replication/cdc.proto";
 import "coordinode/v1/replication/consistency.proto";
@@ -198,6 +199,14 @@ message Execute {
   // and x-source-version metadata. Absent, the statement is counted without
   // a location.
   SourceLocation source = 8;
+
+  // The client operation an autonomous statement (txid zero) carries out.
+  // Its writes take effect at most once however it is retried, on this
+  // stream or another: a retry of a statement that already took effect runs
+  // nothing and is answered with a SessionError naming its outcome (reason
+  // OPERATION_SETTLED). Absent runs the statement unbound. Refused inside a
+  // transaction, whose operation is named on its Commit.
+  coordinode.v1.operation.OperationRef operation = 9;
 }
 
 // A place in the client's source code, sent by a driver in debug mode.
@@ -234,6 +243,13 @@ message Commit {
   // commits. Zero when unset (UNORDERED transactions, or callers that do not
   // pipeline ahead of the commit).
   uint64 last_nonce = 2;
+
+  // The client operation the transaction carries out, allocated before the
+  // Commit is sent. Its writes take effect at most once: after a lost reply
+  // the client resolves the same operation (OperationService.ResolveOperation)
+  // on any connection, and a repeated commit of it runs nothing again.
+  // Absent commits unbound.
+  coordinode.v1.operation.OperationRef operation = 3;
 }
 
 // Roll back an interactive transaction, discarding all buffered writes.

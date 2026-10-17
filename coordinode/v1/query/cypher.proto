@@ -3,6 +3,7 @@ syntax = "proto3";
 package coordinode.v1.query;
 
 import "coordinode/v1/common/types.proto";
+import "coordinode/v1/operation/operation.proto";
 import "coordinode/v1/replication/consistency.proto";
 import "google/api/annotations.proto";
 
@@ -120,6 +121,16 @@ message ExecuteCypherRequest {
   // carries the session's setting here. The statement's deadline is the
   // call's gRPC deadline.
   optional uint32 query_memory_limit_mb = 9;
+
+  // The client operation this statement carries out, for a statement that
+  // commits on its own. Its writes take effect at most once however the
+  // request is retried: a retry of a statement that already took effect runs
+  // nothing and is refused with FAILED_PRECONDITION, reason
+  // OPERATION_SETTLED. Absent runs the statement unbound. Inside an
+  // interactive transaction (transaction_id set) it is refused with
+  // INVALID_ARGUMENT: the transaction's operation is named on its
+  // CommitTransactionRequest.
+  coordinode.v1.operation.OperationRef operation = 10;
 }
 
 message ExecuteCypherResponse {
@@ -206,6 +217,12 @@ message CommitTransactionRequest {
   // caller decides what to do next from those rather than reading the node
   // again and racing a second time.
   repeated ExpectedNodeVersion expect = 2;
+
+  // The client operation the transaction carries out. Its writes take effect
+  // at most once: repeating the commit after a lost reply, on any
+  // connection, runs nothing again and is refused with FAILED_PRECONDITION,
+  // reason OPERATION_SETTLED, naming the outcome. Absent commits unbound.
+  coordinode.v1.operation.OperationRef operation = 3;
 }
 
 // A node and the version the caller believes it is at.
