@@ -138,8 +138,7 @@ message ResolveOperationRequest {
   // The operation to resolve.
   OperationRef operation = 1;
 
-  // When true, an operation no attempt has committed (nothing recorded, or a
-  // provisional write admitted and not yet drained) is excluded through the
+  // When true, an operation nothing is recorded of is excluded through the
   // log first, so the answer is final: COMMITTED, or ABORTED and never taking
   // effect. The proof a client needs before it gives the operation up or
   // runs the work again under a new reference. Decided by the group's log,
@@ -156,9 +155,8 @@ enum OperationState {
   // It is proven never to take effect: excluded before any attempt committed
   // it, or its incarnation closed with nothing recorded of it.
   OPERATION_STATE_ABORTED = 2;
-  // A provisional write (memory or cache journal) of it is admitted and its
-  // effects are not committed yet; no other attempt of it takes effect.
-  OPERATION_STATE_ADMITTED = 3;
+  reserved 3;
+  reserved "OPERATION_STATE_ADMITTED";
   // Nothing is recorded of it: an attempt may still be on its way. Not proof
   // that it was never sent; resolving with exclude gives one.
   OPERATION_STATE_UNKNOWN = 4;
