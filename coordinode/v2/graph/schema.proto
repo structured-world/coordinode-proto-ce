@@ -3,6 +3,7 @@ syntax = "proto3";
 package coordinode.v2.graph;
 
 import "coordinode/v1/common/types.proto";
+import "coordinode/v1/operation/operation.proto";
 import "coordinode/v1/query/vector.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/duration.proto";
@@ -19,6 +20,45 @@ import "google/protobuf/empty.proto";
 // CONSTRAINT` in Cypher: a constraint created here is the same object a query
 // sees, and the reverse.
 service SchemaService {
+  // Publish label definitions, edge type definitions and constraints
+  // together, in one catalog change or in none. Every declaration is
+  // checked against one view of the catalog plus the package itself, so a
+  // constraint may name a label the same request defines, in any order. An
+  // absent object is created, an equal one kept as it is, and a different
+  // one refused unless its declaration names the revision it changes; an
+  // object the request does not mention is left alone. When every object is
+  // already in place nothing is written, scanned or started.
+  //
+  // Acceptance is not readiness: a definition that could refuse stored
+  // records is proved over them in the background, and a uniqueness is
+  // proved by the build of its index; the rules in force before stay until
+  // then. The response names that work per object; AwaitSchema waits for it.
+  //
+  // Refused, with nothing published, when the request is malformed or too
+  // large (INVALID_ARGUMENT), when a declaration differs from the object in
+  // place without naming its revision (FAILED_PRECONDITION, reason
+  // CATALOG_OBJECT_DIFFERS), when a change names a revision the object is
+  // no longer at (FAILED_PRECONDITION, reason CATALOG_REVISION_MISMATCH), or
+  // when a declaration cannot hold (FAILED_PRECONDITION).
+  rpc PublishSchema(PublishSchemaRequest) returns (PublishSchemaResponse) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/publications"
+      body: "*"
+    };
+  }
+
+  // Wait up to the request's `wait` for background schema work to put its
+  // object in force: the proof of a label definition, or the build of a
+  // constraint's index, named by the operations PublishSchema returned.
+  // Waiting, or giving up waiting, cancels nothing; CancelIndexBuild
+  // cancels either kind of operation.
+  rpc AwaitSchema(AwaitSchemaRequest) returns (AwaitSchemaResponse) {
+    option (google.api.http) = {
+      post: "/v2/graph/schema/publications/await"
+      body: "*"
+    };
+  }
+
   // Create a node label definition. Creating a type never builds an index
   // and never declares a constraint.
   rpc CreateLabel(CreateLabelRequest) returns (Label) {
@@ -359,6 +399,24 @@ message Label {
   // of the label's constraints advances it; a published revision never
   // changes.
   uint64 schema_revision = 7;
+  // A definition published but not yet in force: the stored nodes are being
+  // proved against it. The fields above stay the rules in force until the
+  // proof puts it in force; every write meanwhile must satisfy both. Unset
+  // when no proof is running.
+  LabelCandidate candidate = 8;
+}
+
+// A label definition published and being proved over the stored nodes.
+message LabelCandidate {
+  // Stored properties it declares, by name.
+  repeated PropertyDefinition properties = 1;
+  // Computed properties it declares, by name.
+  repeated ComputedPropertyDefinition computed_properties = 2;
+  // How it validates and stores properties.
+  SchemaMode schema_mode = 3;
+  // The operation proving it: awaited with AwaitSchema, cancelled with
+  // CancelIndexBuild.
+  uint64 operation = 4;
 }
 
 // An edge type as the catalog holds it.
@@ -424,6 +482,183 @@ message ListEdgeTypesRequest {}
 message ListEdgeTypesResponse {
   // Every edge type, ordered by name.
   repeated EdgeType edge_types = 1;
+}
+
+// A label definition in a PublishSchema request.
+message LabelDeclaration {
+  // Label name, for example "User". Case-sensitive. At most once per
+  // request.
+  string name = 1;
+  // Stored properties. Names are unique within the declaration.
+  repeated PropertyDefinition properties = 2;
+  // Computed properties. Names are unique and distinct from the stored ones.
+  repeated ComputedPropertyDefinition computed_properties = 3;
+  // How the label validates and stores properties.
+  SchemaMode schema_mode = 4;
+  // Whether nodes of the label are bitemporal. Fixed when the label is
+  // created.
+  bool temporal = 5;
+  // Unset: create the label when absent, keep it when its definition is
+  // equal, refuse the request when it differs. Set: change the definition
+  // to this one, provided it is at this revision, the one the client read
+  // it at; an absent label or another revision refuses the request.
+  optional uint64 expected_revision = 6;
+}
+
+// An edge type definition in a PublishSchema request.
+message EdgeTypeDeclaration {
+  // Edge type name, for example "FOLLOWS". Case-sensitive. At most once per
+  // request.
+  string name = 1;
+  // Stored properties. Names are unique within the declaration.
+  repeated PropertyDefinition properties = 2;
+  // Whether edges of the type are temporal. Fixed when the type is created.
+  bool temporal = 3;
+  // The declared property that, with the endpoints, identifies one edge;
+  // see CreateEdgeTypeRequest.discriminator. Fixed when the type is created.
+  string discriminator = 4;
+  // As LabelDeclaration.expected_revision, for the edge type.
+  optional uint64 expected_revision = 5;
+}
+
+// A constraint in a PublishSchema request. A constraint is created when
+// absent and kept when the one in place requires the same; changing one is
+// dropping it and declaring another.
+message ConstraintDeclaration {
+  // Constraint name, unique in the database. Empty: the server derives one
+  // from the label, properties and kind, and returns it. A name holding a
+  // constraint that requires something else refuses the request.
+  string name = 1;
+  // What the constraint applies to. Required.
+  oneof target {
+    // The label whose nodes are constrained: one the catalog defines, one
+    // the same request declares, or neither (the constraint then gives it a
+    // FLEXIBLE definition).
+    string label = 2;
+  }
+  // The constrained properties, in order; see
+  // CreateConstraintRequest.properties.
+  repeated string properties = 3;
+  // What the constraint requires. Required.
+  ConstraintKind kind = 4;
+  // The required type, for kind PROPERTY_TYPE; must be unset for any other
+  // kind.
+  PropertyType property_type = 5;
+  // UNIQUE and NODE_KEY only: the string property the build may change to
+  // end a stored duplicate; see CreateConstraintRequest.on_duplicate_rename.
+  string on_duplicate_rename = 6;
+  // UNIQUE only: the nodes the uniqueness holds among. Unset: every node of
+  // the label.
+  ConstraintScope scope = 7;
+}
+
+message PublishSchemaRequest {
+  // Label definitions.
+  repeated LabelDeclaration labels = 1;
+  // Edge type definitions.
+  repeated EdgeTypeDeclaration edge_types = 2;
+  // Constraints. The request carries at most 4096 declarations in all; a
+  // larger one is refused, never split.
+  repeated ConstraintDeclaration constraints = 3;
+  // The client operation the publication is, so it takes effect at most
+  // once however it is retried: a retry after a lost reply of one that
+  // committed is refused with FAILED_PRECONDITION, reason
+  // OPERATION_SETTLED, naming its outcome. Unset: no operation identity. A
+  // request that changes nothing records nothing under it.
+  coordinode.v1.operation.OperationRef operation = 4;
+}
+
+// The kind of a schema object.
+enum SchemaObjectKind {
+  // Never sent.
+  SCHEMA_OBJECT_KIND_UNSPECIFIED = 0;
+  // A node label definition.
+  SCHEMA_OBJECT_KIND_LABEL = 1;
+  // An edge type definition.
+  SCHEMA_OBJECT_KIND_EDGE_TYPE = 2;
+  // A named constraint.
+  SCHEMA_OBJECT_KIND_CONSTRAINT = 3;
+}
+
+// What a publication did with one declared object.
+enum PublicationDisposition {
+  // Never sent.
+  PUBLICATION_DISPOSITION_UNSPECIFIED = 0;
+  // It was absent and is created.
+  PUBLICATION_DISPOSITION_CREATED = 1;
+  // It was in place, equal to the declaration, and is kept unchanged.
+  PUBLICATION_DISPOSITION_RETAINED = 2;
+  // It was changed as the declaration asked.
+  PUBLICATION_DISPOSITION_CHANGED = 3;
+}
+
+// One declared object after a publication.
+message PublishedSchemaObject {
+  // What kind of object it is.
+  SchemaObjectKind kind = 1;
+  // Its name; for a constraint declared without one, the derived name.
+  string name = 2;
+  // What the publication did with it.
+  PublicationDisposition disposition = 3;
+  // Its revision: a definition's own, or for a constraint the revision of
+  // its label's definition holding it. The one to name in
+  // expected_revision to change a definition.
+  uint64 revision = 4;
+  // For a constraint, where it is in its life; UNSPECIFIED for a
+  // definition.
+  ConstraintState constraint_state = 5;
+  // The background work putting the object in force: for a label, the
+  // proof of its new definition; for a UNIQUE or NODE_KEY constraint, its
+  // index build. Unset when it is in force already. Awaited with
+  // AwaitSchema; kept across a restart or a change of leader.
+  optional uint64 operation = 6;
+}
+
+message PublishSchemaResponse {
+  // Whether a catalog change was committed. False when every declaration
+  // was already in place.
+  bool committed = 1;
+  // Every declared object: labels, then edge types, then constraints, each
+  // in request order.
+  repeated PublishedSchemaObject objects = 2;
+}
+
+message AwaitSchemaRequest {
+  // The operations to wait for, as PublishedSchemaObject.operation named
+  // them. An operation the server knows nothing of is reported FAILED.
+  repeated uint64 operations = 1;
+  // How long to wait for all of them together before answering. Unset or
+  // zero: answer at once.
+  google.protobuf.Duration wait = 2;
+}
+
+// Where background schema work stands.
+enum SchemaReadinessState {
+  // Never sent.
+  SCHEMA_READINESS_STATE_UNSPECIFIED = 0;
+  // Its object is in force over the stored data.
+  SCHEMA_READINESS_STATE_READY = 1;
+  // Still running; the rules in force before still are.
+  SCHEMA_READINESS_STATE_PENDING = 2;
+  // Ended without putting its object in force: a definition is withdrawn
+  // with the rules before kept, a constraint withdrawn with its index.
+  // Nothing else the publication published is undone.
+  SCHEMA_READINESS_STATE_FAILED = 3;
+}
+
+// One operation after a wait.
+message OperationReadiness {
+  // The operation.
+  uint64 operation = 1;
+  // Where it stands.
+  SchemaReadinessState state = 2;
+  // Why it failed, for FAILED; empty otherwise.
+  string failure = 3;
+}
+
+message AwaitSchemaResponse {
+  // Each requested operation, in request order.
+  repeated OperationReadiness operations = 1;
 }
 
 // What a constraint requires of the properties it names.
