@@ -56,11 +56,12 @@ message ClientFrame {
   oneof op {
     // Run a query statement (autonomous or inside a transaction).
     Execute execute = 2;
-    // Open an interactive transaction; the server replies with a Begun(txid).
+    // Open an interactive transaction; the server replies with a Begun
+    // carrying its handle.
     Begin begin = 3;
-    // Commit an interactive transaction by its txid.
+    // Commit an interactive transaction by its handle.
     Commit commit = 4;
-    // Roll back an interactive transaction by its txid.
+    // Roll back an interactive transaction by its handle.
     Rollback rollback = 5;
     // Abort an in-flight request and close its cursor.
     Cancel cancel = 6;
@@ -165,11 +166,14 @@ message Execute {
   // ExecuteCypherRequest parameters.
   map<string, coordinode.v1.common.PropertyValue> parameters = 2;
 
-  // Interactive transaction handle from a prior Begun. Zero means the statement
-  // is autonomous (implicit begin + commit). Non-zero runs the statement inside
-  // that transaction: it reads the transaction's pinned snapshot and its writes
-  // buffer until Commit.
-  uint64 txid = 3;
+  // Interactive transaction handle, exactly as a prior Begun returned it.
+  // Empty means the statement is autonomous (implicit begin + commit). Set,
+  // it runs the statement inside that transaction: it reads the
+  // transaction's pinned snapshot and its writes buffer until Commit. The
+  // handle is opaque and refused as on the unary service
+  // (coordinode.v1.query.BeginTransactionResponse.transaction). It keeps the
+  // number the numeric handle had, so a numeric one fails to decode.
+  bytes transaction = 3;
 
   // Per-transaction ordering nonce, used only when the transaction was opened
   // with ORDERING_ORDERED. The server applies the transaction's statements in
@@ -200,7 +204,7 @@ message Execute {
   // a location.
   SourceLocation source = 8;
 
-  // The client operation an autonomous statement (txid zero) carries out.
+  // The client operation an autonomous statement (no transaction) carries out.
   // Its writes take effect at most once however it is retried, on this
   // stream or another: a retry of a statement that already took effect runs
   // nothing and is answered with a SessionError naming its outcome (reason
@@ -235,8 +239,8 @@ message Begin {
 
 // Commit an interactive transaction.
 message Commit {
-  // Transaction handle from a prior Begun.
-  uint64 txid = 1;
+  // Transaction handle, exactly as a prior Begun returned it.
+  bytes transaction = 1;
 
   // Expected final nonce of the transaction's statement chain, in
   // ORDERING_ORDERED mode, so the server can detect a complete chain before it
@@ -254,8 +258,8 @@ message Commit {
 
 // Roll back an interactive transaction, discarding all buffered writes.
 message Rollback {
-  // Transaction handle from a prior Begun.
-  uint64 txid = 1;
+  // Transaction handle, exactly as a prior Begun returned it.
+  bytes transaction = 1;
 }
 
 // Abort an in-flight request and close its cursor.
@@ -383,9 +387,9 @@ message ConnectionStatus {
 
 // Acknowledges Begin.
 message Begun {
-  // Allocated transaction handle, always non-zero. Pass it as Execute.txid and
-  // to Commit / Rollback.
-  uint64 txid = 1;
+  // Server-assigned transaction handle, opaque to the client. Pass it
+  // unchanged as Execute.transaction and to Commit / Rollback.
+  bytes transaction = 1;
 }
 
 // Opens a result cursor.
