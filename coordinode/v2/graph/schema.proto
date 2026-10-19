@@ -607,10 +607,12 @@ message PublishedSchemaObject {
   // For a constraint, where it is in its life; UNSPECIFIED for a
   // definition.
   ConstraintState constraint_state = 5;
-  // The background work putting the object in force: for a label, the
-  // proof of its new definition; for a UNIQUE or NODE_KEY constraint, its
-  // index build. Unset when it is in force already. Awaited with
-  // AwaitSchema; kept across a restart or a change of leader.
+  // The background work putting the object in force: for a label, and for
+  // a NOT_NULL or PROPERTY_TYPE constraint, the proof over the stored nodes
+  // (one operation for every label the publication changes); for a UNIQUE
+  // or NODE_KEY constraint, its index build. Unset when it is in force
+  // already. Awaited with AwaitSchema; kept across a restart or a change of
+  // leader.
   optional uint64 operation = 6;
 }
 
@@ -642,7 +644,10 @@ enum SchemaReadinessState {
   SCHEMA_READINESS_STATE_PENDING = 2;
   // Ended without putting its object in force: a definition is withdrawn
   // with the rules before kept, a constraint withdrawn with its index.
-  // Nothing else the publication published is undone.
+  // Nothing else the publication published is undone. One operation proves
+  // every label definition (and the presence and type constraints) a
+  // publication changes, each settled on its own: FAILED when any of them
+  // was refused, `failure` naming those, the others in force.
   SCHEMA_READINESS_STATE_FAILED = 3;
 }
 
