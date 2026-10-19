@@ -1,0 +1,247 @@
+syntax = "proto3";
+
+package coordinode.internode.routing;
+
+// Whole commands carried from the member a client reached (the ingress) to
+// the member that executes them: an autonomous statement, or a step of an
+// interactive transaction at the member that holds it. The executing member
+// selects the view, evaluates, validates and commits; the ingress never
+// ships a write set it evaluated itself.
+//
+// Served only on the inter-node channel, to admitted members of the same
+// deployment; a client credential never reaches it, and an admitted member
+// is not by that alone allowed to act as any caller: each command names the
+// caller its ingress verified. A call is never forwarded again: a member that
+// cannot run it answers with a refusal naming the leader it knows of, and
+// the ingress decides whether to try once more.
+//
+// Values (parameters and rows) travel in the engine's own encoding,
+// MessagePack of its value type: both members run the same version, which
+// the version handshake establishes before any call here.
+service CommandRoutingService {
+  // Run one statement at the member that executes it and stream its answer:
+  // `admitted` once the statement has its place (in a transaction, behind the
+  // commands admitted before it; otherwise at once), then its columns, row
+  // batches, and the statistics that end it. A refusal ends the stream with
+  // the status the statement failed with.
+  rpc Execute(RoutedStatement) returns (stream RoutedStatementFrame);
+
+  // Open an interactive transaction at the leader.
+  rpc Begin(RoutedBegin) returns (RoutedBegun);
+
+  // Commit an interactive transaction at the member that holds it.
+  rpc Commit(RoutedCommit) returns (RoutedCommitted);
+
+  // Roll back an interactive transaction at the member that holds it.
+  rpc Rollback(RoutedRollback) returns (RoutedRolledBack);
+}
+
+// Who a routed command acts for, as the ingress's authentication or its
+// trusted host established it. Never taken from a client's request fields.
+message ActingContext {
+  oneof context {
+    // Every caller shares one trust boundary: an embedding host's own access,
+    // or a deployment configured without principals. No caller isolation.
+    Trusted trusted = 1;
+    // A verified principal.
+    Principal principal = 2;
+  }
+}
+
+// The single-trust access mode; carries nothing.
+message Trusted {}
+
+// A verified subject and the scope it acts in.
+message Principal {
+  // The stable subject, as its issuer names it.
+  string subject = 1;
+  // The issuer or trust scope the subject belongs to.
+  string trust_scope = 2;
+  // The namespace the caller is bound to.
+  string namespace = 3;
+}
+
+// The settings a statement runs under, as the statement, its session and the
+// ingress's defaults named them. A setting left unset here takes the
+// executing member's own.
+message RoutedSettings {
+  // Read concern level, numbered as coordinode.v1.replication.ReadConcernLevel
+  // (1 local, 2 majority, 3 linearizable, 4 snapshot); zero takes the
+  // executing member's default.
+  uint32 read_concern_level = 1;
+  // Log index the read waits for; zero waits for none.
+  uint64 after_index = 2;
+  // Timestamp a snapshot read is pinned to; zero pins none.
+  uint64 at_timestamp = 3;
+  // When a write is acknowledged; absent takes the executing member's
+  // default.
+  RoutedWriteConcern write_concern = 4;
+  // Vector consistency, numbered as coordinode.v1.replication.VectorConsistency;
+  // zero leaves it to what the read concern implies.
+  uint32 vector_consistency = 5;
+  // How long the statement waits for a vector index still being built, in
+  // milliseconds; absent takes the executing member's setting.
+  optional uint64 vector_build_wait_ms = 6;
+  // Memory limit of the statement in bytes; absent takes the executing
+  // member's setting.
+  optional uint64 query_memory_limit = 7;
+}
+
+// When a write is acknowledged.
+message RoutedWriteConcern {
+  // Members that must hold the write, the leader included, when `majority`
+  // is false; zero answers without waiting for any.
+  uint32 acks = 1;
+  // A majority of the group must hold the write; `acks` is then unused.
+  bool majority = 2;
+  // The state each counted member holds the write in, numbered as
+  // coordinode.v1.replication.Journal (1 journal, 2 cache, 3 memory).
+  uint32 journal = 3;
+  // Milliseconds to wait for the counted members; zero waits without bound.
+  uint32 timeout_ms = 4;
+}
+
+// One statement to run at the member that executes it.
+message RoutedStatement {
+  // Who the statement acts for.
+  ActingContext actor = 1;
+  // The statement's text.
+  string query = 2;
+  // Its parameters, a map from name to value in the engine's encoding;
+  // empty for none.
+  bytes parameters = 3;
+  // The settings it runs under.
+  RoutedSettings settings = 4;
+  // The interactive transaction it runs in, as the client carries it; empty
+  // for a statement that commits on its own.
+  bytes transaction = 5;
+  // Its number within the transaction; zero for none.
+  uint64 nonce = 6;
+  // The client operation an autonomous statement carries out, in the
+  // descriptor's byte form; empty for none.
+  bytes operation = 7;
+  // What is left of the caller's deadline, in milliseconds; zero for none.
+  uint64 deadline_ms = 8;
+  // Where in the client's code the statement was issued, for the executing
+  // member's advisor; absent when the client sent none.
+  SourceLocation source = 9;
+}
+
+// A place in a client's code, with the application that named it.
+message SourceLocation {
+  // Source file path as the client knows it.
+  string file = 1;
+  // Line number in that file.
+  uint32 line = 2;
+  // Enclosing function; empty when the client could not tell.
+  string function = 3;
+  // The client application's name; empty when it named none.
+  string app = 4;
+  // The client application's version; empty when it named none.
+  string version = 5;
+}
+
+// One event of a routed statement's answer.
+message RoutedStatementFrame {
+  oneof event {
+    // The statement has its place; the ingress may pass the next command of
+    // the same transaction on.
+    Admitted admitted = 1;
+    // The result's column names, before its first rows.
+    Columns columns = 2;
+    // A batch of rows, each a list of values in the engine's encoding.
+    bytes rows = 3;
+    // The statistics that end the answer.
+    RoutedStats end = 4;
+  }
+}
+
+// Carries nothing: the event is the signal.
+message Admitted {}
+
+// A result's column names, in order.
+message Columns {
+  repeated string names = 1;
+}
+
+// What a finished statement reports.
+message RoutedStats {
+  int64 nodes_created = 1;
+  int64 nodes_deleted = 2;
+  int64 edges_created = 3;
+  int64 edges_deleted = 4;
+  int64 properties_set = 5;
+  // Log index the statement's own commit was applied at; zero for none.
+  uint64 applied_index = 6;
+  // Timestamp the statement's own commit landed at; zero for none.
+  uint64 commit_ts = 7;
+  // Log index the read was served at on the executing member.
+  uint64 read_index = 8;
+  // What a read on a read-only member is as of; zero otherwise.
+  uint64 read_as_of_ts = 9;
+}
+
+// Open an interactive transaction.
+message RoutedBegin {
+  // Who the transaction acts for; every later command must act for the same.
+  ActingContext actor = 1;
+  // Its read concern level and write concern, fixed for its life; the read
+  // position fields are unused.
+  RoutedSettings settings = 2;
+  // Statements applied by nonce rather than as they come.
+  bool ordered = 3;
+  // How long an ordered transaction waits for a missing statement, in
+  // milliseconds; zero takes the executing member's setting.
+  uint64 drain_timeout_ms = 4;
+}
+
+// The transaction opened.
+message RoutedBegun {
+  // Its handle, as the client carries it.
+  bytes transaction = 1;
+}
+
+// Commit an interactive transaction.
+message RoutedCommit {
+  // Who the commit acts for.
+  ActingContext actor = 1;
+  // The transaction, as the client carries it.
+  bytes transaction = 2;
+  // The last nonce of an ordered chain; zero for none.
+  uint64 last_nonce = 3;
+  // The client operation the commit carries out, in the descriptor's byte
+  // form; empty for none.
+  bytes operation = 4;
+  // What is left of the caller's deadline, in milliseconds; zero for none.
+  uint64 deadline_ms = 5;
+  // The node versions the caller built its statements on: a node at another
+  // version refuses the whole commit.
+  repeated RoutedExpectation expect = 6;
+}
+
+// A node and the version a caller believes it is at.
+message RoutedExpectation {
+  // The node's id.
+  uint64 node_id = 1;
+  // The version read earlier; absent requires the node not to exist.
+  optional uint64 version = 2;
+}
+
+// The commit's receipt.
+message RoutedCommitted {
+  // Timestamp every write of the transaction landed at.
+  uint64 commit_ts = 1;
+  // Log index the commit was applied at; zero when it reported none.
+  uint64 applied_index = 2;
+}
+
+// Roll back an interactive transaction.
+message RoutedRollback {
+  // Who the rollback acts for.
+  ActingContext actor = 1;
+  // The transaction, as the client carries it.
+  bytes transaction = 2;
+}
+
+// Carries nothing: the rollback is done.
+message RoutedRolledBack {}
