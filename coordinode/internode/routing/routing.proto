@@ -34,6 +34,10 @@ service CommandRoutingService {
 
   // Roll back an interactive transaction at the member that holds it.
   rpc Rollback(RoutedRollback) returns (RoutedRolledBack);
+
+  // Enroll an issuer, resolve an operation, or release or retire operation
+  // records at the leader, which decides them through the group's log.
+  rpc Operation(RoutedOperation) returns (RoutedOperationAnswer);
 }
 
 // Who a routed command acts for, as the ingress's authentication or its
@@ -245,3 +249,82 @@ message RoutedRollback {
 
 // Carries nothing: the rollback is done.
 message RoutedRolledBack {}
+
+// One call on the records of client operations.
+message RoutedOperation {
+  // Who the call acts for.
+  ActingContext actor = 1;
+  oneof call {
+    // Enroll a new incarnation of this issuer, its 16 bytes.
+    bytes enroll = 2;
+    // Resolve an operation's outcome.
+    RoutedResolve resolve = 3;
+    // Release the outcomes of these settled operations.
+    RoutedOperations acknowledge = 4;
+    // Retire the operations of this descriptor's incarnation numbered below
+    // its sequence, in the descriptor's byte form.
+    bytes retire = 5;
+  }
+}
+
+// Resolve one operation.
+message RoutedResolve {
+  // The operation, in the descriptor's byte form.
+  bytes operation = 1;
+  // Exclude it through the log when nothing is recorded of it, so the answer
+  // is final.
+  bool exclude = 2;
+}
+
+// Several operations.
+message RoutedOperations {
+  // Each in the descriptor's byte form.
+  repeated bytes operations = 1;
+}
+
+// The answer to a call on operation records.
+message RoutedOperationAnswer {
+  oneof answer {
+    // The incarnation an enrollment opened.
+    RoutedEnrolled enrolled = 1;
+    // How a resolved operation stands.
+    RoutedOutcome outcome = 2;
+    // A release or retirement is done.
+    RoutedDone done = 3;
+  }
+}
+
+// An enrolled incarnation.
+message RoutedEnrolled {
+  // Its number.
+  uint64 incarnation = 1;
+  // The first operation number it hands out.
+  uint64 next_sequence = 2;
+  // The deployment that enrolled it, 16 bytes.
+  bytes deployment = 3;
+}
+
+// How an operation stands.
+message RoutedOutcome {
+  RoutedOperationState state = 1;
+  // The attempt that committed; zero unless committed.
+  uint64 attempt = 2;
+  // Its commit timestamp; zero unless committed.
+  uint64 commit_ts = 3;
+}
+
+// The states an operation is in.
+enum RoutedOperationState {
+  ROUTED_OPERATION_STATE_UNSPECIFIED = 0;
+  // An attempt of it committed.
+  ROUTED_OPERATION_STATE_COMMITTED = 1;
+  // It is proven never to take effect.
+  ROUTED_OPERATION_STATE_ABORTED = 2;
+  // Nothing is recorded of it.
+  ROUTED_OPERATION_STATE_UNKNOWN = 3;
+  // Its record is released.
+  ROUTED_OPERATION_STATE_RETIRED = 4;
+}
+
+// Carries nothing: the call is done.
+message RoutedDone {}
