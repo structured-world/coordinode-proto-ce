@@ -461,7 +461,19 @@ message RoutedError {
     Text settings_refused = 46;
     // The read could not be placed or fenced as its settings ask.
     ReadFence read_fence = 47;
+    // The member's error could not be carried: its fields a caller decides
+    // on do not fit the 64 KiB bound. Not a refusal: the receiver reads it as
+    // an answer it could not read, whatever the command did.
+    Undeliverable undeliverable = 48;
   }
+}
+
+// An error too large to carry.
+message Undeliverable {
+  // The kind of error it was, for the receiver's log.
+  string variant = 1;
+  // The bytes its encoding would have taken.
+  uint64 size = 2;
 }
 
 // A read that could not be fenced.
@@ -637,7 +649,7 @@ message CascadeFanoutOverflow {
 message DuplicateKey {
   // The table.
   string table = 1;
-  // The key, rendered; possibly cut short at 8 KiB.
+  // The key, rendered, whole.
   string key = 2;
   // The elementId of the row that holds it.
   string element_id = 3;
@@ -649,7 +661,7 @@ message UniqueViolation {
   string index = 1;
   // The indexed properties, comma-separated.
   string property = 2;
-  // The value, rendered; possibly cut short at 8 KiB.
+  // The value, rendered, whole.
   string value = 3;
   // The elementId of the node that holds it.
   string element_id = 4;
