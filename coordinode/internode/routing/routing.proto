@@ -4,7 +4,8 @@ package coordinode.internode.routing;
 
 // Whole commands carried from the member a client reached (the ingress) to
 // the member that executes them: an autonomous statement, or a step of an
-// interactive transaction at the member that holds it. The executing member
+// interactive transaction at the leader, which alone holds open
+// transactions. The executing member
 // selects the view, evaluates, validates and commits; the ingress never
 // ships a write set it evaluated itself.
 //
@@ -26,13 +27,14 @@ service CommandRoutingService {
   // the status the statement failed with.
   rpc Execute(RoutedStatement) returns (stream RoutedStatementFrame);
 
-  // Open an interactive transaction at the leader.
+  // Open an interactive transaction at the leader under the ID the client
+  // drew.
   rpc Begin(RoutedBegin) returns (RoutedBegun);
 
-  // Commit an interactive transaction at the member that holds it.
+  // Commit an interactive transaction at the leader.
   rpc Commit(RoutedCommit) returns (RoutedCommitted);
 
-  // Roll back an interactive transaction at the member that holds it.
+  // Roll back an interactive transaction at the leader.
   rpc Rollback(RoutedRollback) returns (RoutedRolledBack);
 
   // Enroll an issuer, resolve an operation, or release or retire operation
@@ -116,9 +118,9 @@ message RoutedStatement {
   bytes parameters = 3;
   // The settings it runs under.
   RoutedSettings settings = 4;
-  // The interactive transaction it runs in, as the client carries it; empty
-  // for a statement that commits on its own.
-  bytes transaction = 5;
+  // The ID of the interactive transaction it runs in, as the client drew it
+  // (16 bytes); empty for a statement that commits on its own.
+  bytes transaction_id = 5;
   // Its number within the transaction; zero for none.
   uint64 nonce = 6;
   // The client operation an autonomous statement carries out, in the
@@ -129,6 +131,10 @@ message RoutedStatement {
   // Where in the client's code the statement was issued, for the executing
   // member's advisor; absent when the client sent none.
   SourceLocation source = 9;
+  // The statement starts the transaction `transaction_id` names: it opens
+  // with `actor` and the read and write concern of `settings`, statements
+  // applied as they come, then the statement runs in it.
+  bool start_transaction = 10;
 }
 
 // A place in a client's code, with the application that named it.
@@ -187,6 +193,8 @@ message RoutedStats {
 
 // Open an interactive transaction.
 message RoutedBegin {
+  // The ID the client drew for it, 16 bytes.
+  bytes transaction_id = 5;
   // Who the transaction acts for; every later command must act for the same.
   ActingContext actor = 1;
   // Its read concern level and write concern, fixed for its life; the read
@@ -199,18 +207,15 @@ message RoutedBegin {
   uint64 drain_timeout_ms = 4;
 }
 
-// The transaction opened.
-message RoutedBegun {
-  // Its handle, as the client carries it.
-  bytes transaction = 1;
-}
+// Carries nothing: the transaction is open.
+message RoutedBegun {}
 
 // Commit an interactive transaction.
 message RoutedCommit {
   // Who the commit acts for.
   ActingContext actor = 1;
-  // The transaction, as the client carries it.
-  bytes transaction = 2;
+  // The transaction's ID, 16 bytes.
+  bytes transaction_id = 2;
   // The last nonce of an ordered chain; zero for none.
   uint64 last_nonce = 3;
   // The client operation the commit carries out, in the descriptor's byte
@@ -243,8 +248,8 @@ message RoutedCommitted {
 message RoutedRollback {
   // Who the rollback acts for.
   ActingContext actor = 1;
-  // The transaction, as the client carries it.
-  bytes transaction = 2;
+  // The transaction's ID, 16 bytes.
+  bytes transaction_id = 2;
 }
 
 // Carries nothing: the rollback is done.

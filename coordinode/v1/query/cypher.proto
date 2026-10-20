@@ -25,20 +25,6 @@ service CypherService {
     };
   }
 
-  // Begin an interactive multi-statement transaction. Returns its handle;
-  // pass it on ExecuteCypherRequest for each statement, then
-  // CommitTransaction or RollbackTransaction. All statements read the same
-  // pinned snapshot (repeatable read) and writes commit atomically at commit.
-  // Only the leader holds transactions: another member refuses with
-  // FAILED_PRECONDITION, reason NOT_LEADER, naming the leader in the error
-  // metadata (`leader_id`) when one is known.
-  rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse) {
-    option (google.api.http) = {
-      post: "/v1/query/transaction/begin"
-      body: "*"
-    };
-  }
-
   // Commit an interactive transaction: validate the read-set, then persist
   // every buffered statement's writes in a single proposal.
   rpc CommitTransaction(CommitTransactionRequest) returns (CommitTransactionResponse) {
@@ -97,15 +83,26 @@ message ExecuteCypherRequest {
   // Read-only queries ignore this field.
   coordinode.v1.replication.WriteConcern write_concern = 5;
 
-  // Interactive transaction handle, exactly as BeginTransactionResponse
-  // returned it. When set, this statement runs inside that transaction: it
-  // reads the transaction's pinned snapshot and its writes buffer until
-  // CommitTransaction. When empty (omitted), the statement auto-commits on
-  // its own (the default). See BeginTransactionResponse.transaction for how a
-  // handle is refused. The field keeps the number the numeric handle had, so
-  // a client still sending a number fails to decode instead of having its
-  // statement run outside the transaction.
-  bytes transaction = 6;
+  // Interactive transaction this statement runs in: a random UUID (version 4,
+  // 16 bytes) the client draws for the transaction and sends with each of its
+  // statements and with its CommitTransaction or RollbackTransaction. Empty
+  // (omitted) runs the statement on its own, committed by itself (the
+  // default). Set, the statement reads the transaction's snapshot, pinned
+  // when it started, and its writes buffer until CommitTransaction.
+  //
+  // Any member accepts it and passes it on to the leader, which alone holds
+  // open transactions. The ID names no member or term: when the leader
+  // changes, the transaction ends with nothing of it applied, and the new
+  // leader, which never held it, refuses it with NOT_FOUND, reason
+  // UNKNOWN_TRANSACTION; the client runs the transaction again under a new
+  // ID. The same answer comes for an ID nothing is open under, or one
+  // another caller opened. A value that is not 16 bytes is refused with
+  // INVALID_ARGUMENT. A transaction that ended because one of its statements
+  // failed, or because it stayed idle, is refused with ABORTED, reason
+  // TRANSACTION_ABORTED. A command arriving while another one runs on the
+  // same transaction past its queue is refused with ABORTED, reason
+  // TRANSACTION_BUSY, and leaves the transaction as it is.
+  bytes transaction_id = 6;
 
   // Vector consistency of this statement, below a `vector_consistency` hint
   // in its query. UNSPECIFIED leaves it to the server: the mode the query's
@@ -134,10 +131,19 @@ message ExecuteCypherRequest {
   // request is retried: a retry of a statement that already took effect runs
   // nothing and is refused with FAILED_PRECONDITION, reason
   // OPERATION_SETTLED. Absent runs the statement unbound. Inside an
-  // interactive transaction (transaction set) it is refused with
+  // interactive transaction (transaction_id set) it is refused with
   // INVALID_ARGUMENT: the transaction's operation is named on its
   // CommitTransactionRequest.
   coordinode.v1.operation.OperationRef operation = 10;
+
+  // This statement starts the transaction `transaction_id` names: the
+  // leader pins its snapshot and opens it under that ID, then runs the
+  // statement in it. There is no separate begin call. The statement's
+  // read_concern and write_concern become the transaction's, fixed until it
+  // ends; later statements' concerns are not read. An ID already open is
+  // refused with ALREADY_EXISTS, reason TRANSACTION_ID_IN_USE, and nothing
+  // runs. Set without transaction_id, it is refused with INVALID_ARGUMENT.
+  bool start_transaction = 11;
 }
 
 message ExecuteCypherResponse {
@@ -202,29 +208,12 @@ message QueryPlan {
   double estimated_rows = 4;
 }
 
-message BeginTransactionRequest {}
-
-message BeginTransactionResponse {
-  // Server-assigned handle for subsequent ExecuteCypher / CommitTransaction /
-  // RollbackTransaction calls. Opaque: the client stores it and sends it back
-  // unchanged, and never builds or inspects one. It names the database, the
-  // member holding the transaction and the leadership term it was begun in,
-  // so a handle of another database, an earlier term or a restarted server
-  // names no live transaction. Bytes that are not a handle are refused with
-  // INVALID_ARGUMENT. A handle whose transaction ended because the leader
-  // changed before it was committed is refused with ABORTED, reason
-  // TRANSACTION_ABORTED: nothing of it was applied, and the client runs the
-  // transaction again from BeginTransaction. A handle naming nothing open,
-  // or a transaction of another caller, is refused with NOT_FOUND, reason
-  // UNKNOWN_TRANSACTION. A command arriving while another one runs on the
-  // same transaction is refused with ABORTED, reason TRANSACTION_BUSY, and
-  // leaves the transaction as it is.
-  bytes transaction = 1;
-}
-
 message CommitTransactionRequest {
-  // The transaction to commit, as BeginTransactionResponse returned it.
-  bytes transaction = 1;
+  // The transaction to commit: the ID its statements carried
+  // (ExecuteCypherRequest.transaction_id). Refused as a statement's ID is;
+  // after a lost reply, a NOT_FOUND answer does not mean the commit failed,
+  // and `operation` resolves how it stands.
+  bytes transaction_id = 1;
 
   // Commit only while these nodes are still at these versions. An empty list
   // is the ordinary unconditional commit.
@@ -272,8 +261,9 @@ message CommitTransactionResponse {
 }
 
 message RollbackTransactionRequest {
-  // The transaction to roll back, as BeginTransactionResponse returned it.
-  bytes transaction = 1;
+  // The transaction to roll back: the ID its statements carried
+  // (ExecuteCypherRequest.transaction_id).
+  bytes transaction_id = 1;
 }
 
 message RollbackTransactionResponse {}

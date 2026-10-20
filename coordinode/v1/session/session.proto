@@ -56,12 +56,14 @@ message ClientFrame {
   oneof op {
     // Run a query statement (autonomous or inside a transaction).
     Execute execute = 2;
-    // Open an interactive transaction; the server replies with a Begun
-    // carrying its handle.
+    // Open an interactive transaction under the ID the client drew. Nothing
+    // answers a Begin that succeeds: the client sends the transaction's
+    // statements right after it. A refused Begin is answered with a
+    // SessionError.
     Begin begin = 3;
-    // Commit an interactive transaction by its handle.
+    // Commit an interactive transaction by its ID.
     Commit commit = 4;
-    // Roll back an interactive transaction by its handle.
+    // Roll back an interactive transaction by its ID.
     Rollback rollback = 5;
     // Abort an in-flight request and close its cursor.
     Cancel cancel = 6;
@@ -166,14 +168,13 @@ message Execute {
   // ExecuteCypherRequest parameters.
   map<string, coordinode.v1.common.PropertyValue> parameters = 2;
 
-  // Interactive transaction handle, exactly as a prior Begun returned it.
+  // Interactive transaction this statement runs in, the ID its Begin carried.
   // Empty means the statement is autonomous (implicit begin + commit). Set,
   // it runs the statement inside that transaction: it reads the
-  // transaction's pinned snapshot and its writes buffer until Commit. The
-  // handle is opaque and refused as on the unary service
-  // (coordinode.v1.query.BeginTransactionResponse.transaction). It keeps the
-  // number the numeric handle had, so a numeric one fails to decode.
-  bytes transaction = 3;
+  // transaction's pinned snapshot and its writes buffer until Commit. The ID
+  // is refused as on the unary service
+  // (coordinode.v1.query.ExecuteCypherRequest.transaction_id).
+  bytes txid = 3;
 
   // Per-transaction ordering nonce, used only when the transaction was opened
   // with ORDERING_ORDERED. The server applies the transaction's statements in
@@ -227,6 +228,13 @@ message SourceLocation {
 
 // Open an interactive transaction.
 message Begin {
+  // The transaction's ID: a random UUID (version 4, 16 bytes) the client
+  // draws, sent again on its Execute, Commit and Rollback frames. It names no
+  // member or term; any member passes the transaction's commands on to the
+  // leader. An ID already open is refused with ALREADY_EXISTS, reason
+  // TRANSACTION_ID_IN_USE; one that is not 16 bytes with INVALID_ARGUMENT.
+  bytes txid = 3;
+
   // Statement ordering policy for the transaction.
   Ordering ordering = 1;
 
@@ -239,8 +247,8 @@ message Begin {
 
 // Commit an interactive transaction.
 message Commit {
-  // Transaction handle, exactly as a prior Begun returned it.
-  bytes transaction = 1;
+  // The transaction to commit, the ID its Begin carried.
+  bytes txid = 1;
 
   // Expected final nonce of the transaction's statement chain, in
   // ORDERING_ORDERED mode, so the server can detect a complete chain before it
@@ -258,8 +266,8 @@ message Commit {
 
 // Roll back an interactive transaction, discarding all buffered writes.
 message Rollback {
-  // Transaction handle, exactly as a prior Begun returned it.
-  bytes transaction = 1;
+  // The transaction to roll back, the ID its Begin carried.
+  bytes txid = 1;
 }
 
 // Abort an in-flight request and close its cursor.
@@ -275,8 +283,6 @@ message ServerFrame {
 
   // The event. Exactly one is set.
   oneof event {
-    // Acknowledges Begin and returns the allocated transaction handle.
-    Begun begun = 2;
     // Opens a cursor for a query, carrying the column header.
     CursorOpen cursor_open = 3;
     // A batch of result rows for an open cursor; many may arrive per request.
@@ -383,13 +389,6 @@ message ConnectionStatus {
   // whole so a client can confirm a Configure took effect, rather than assume
   // the fields it sent are the ones now applied.
   Configure settings = 8;
-}
-
-// Acknowledges Begin.
-message Begun {
-  // Server-assigned transaction handle, opaque to the client. Pass it
-  // unchanged as Execute.transaction and to Commit / Rollback.
-  bytes transaction = 1;
 }
 
 // Opens a result cursor.
