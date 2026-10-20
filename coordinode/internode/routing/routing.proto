@@ -24,7 +24,9 @@ service CommandRoutingService {
   // `admitted` once the statement has its place (in a transaction, behind the
   // commands admitted before it; otherwise at once), then its columns, row
   // batches, and the statistics that end it. A refusal ends the stream with
-  // the status the statement failed with.
+  // the status the statement failed with. An ingress that leaves before the
+  // whole answer reached it aborts the transaction the statement ran in: its
+  // client cannot know what the statement did.
   rpc Execute(RoutedStatement) returns (stream RoutedStatementFrame);
 
   // Open an interactive transaction at the leader under the ID the client
@@ -121,8 +123,6 @@ message RoutedStatement {
   // The ID of the interactive transaction it runs in, as the client drew it
   // (16 bytes); empty for a statement that commits on its own.
   bytes transaction_id = 5;
-  // Its number within the transaction; zero for none.
-  uint64 nonce = 6;
   // The client operation an autonomous statement carries out, in the
   // descriptor's byte form; empty for none.
   bytes operation = 7;
@@ -131,10 +131,6 @@ message RoutedStatement {
   // Where in the client's code the statement was issued, for the executing
   // member's advisor; absent when the client sent none.
   SourceLocation source = 9;
-  // The statement starts the transaction `transaction_id` names: it opens
-  // with `actor` and the read and write concern of `settings`, statements
-  // applied as they come, then the statement runs in it.
-  bool start_transaction = 10;
 }
 
 // A place in a client's code, with the application that named it.
@@ -200,11 +196,12 @@ message RoutedBegin {
   // Its read concern level and write concern, fixed for its life; the read
   // position fields are unused.
   RoutedSettings settings = 2;
-  // Statements applied by nonce rather than as they come.
-  bool ordered = 3;
-  // How long an ordered transaction waits for a missing statement, in
-  // milliseconds; zero takes the executing member's setting.
-  uint64 drain_timeout_ms = 4;
+  // What ends it when it stays idle past the idle timeout: 1 rolls it back,
+  // 2 commits it; zero takes the executing member's setting.
+  uint32 timeout_outcome = 3;
+  // The client operation its commit carries out, in the descriptor's byte
+  // form; empty for none. Required to commit it at idle expiry.
+  bytes operation = 4;
 }
 
 // Carries nothing: the transaction is open.
@@ -216,10 +213,8 @@ message RoutedCommit {
   ActingContext actor = 1;
   // The transaction's ID, 16 bytes.
   bytes transaction_id = 2;
-  // The last nonce of an ordered chain; zero for none.
-  uint64 last_nonce = 3;
   // The client operation the commit carries out, in the descriptor's byte
-  // form; empty for none.
+  // form; empty for the one its begin named, or none.
   bytes operation = 4;
   // What is left of the caller's deadline, in milliseconds; zero for none.
   uint64 deadline_ms = 5;
@@ -250,6 +245,10 @@ message RoutedRollback {
   ActingContext actor = 1;
   // The transaction's ID, 16 bytes.
   bytes transaction_id = 2;
+  // The client did not ask for it: the stream a statement of the
+  // transaction ran on was lost, so the transaction is aborted and later
+  // commands for it are told so.
+  bool abandoned = 3;
 }
 
 // Carries nothing: the rollback is done.
