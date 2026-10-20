@@ -679,14 +679,185 @@ message UniquenessUnresolved {
 message ConstraintViolation {
   // The constraint.
   string constraint = 1;
-  // What it requires, in the engine's encoding of a constraint kind.
-  bytes kind = 2;
+  // What it requires.
+  RoutedConstraintKind kind = 2;
   // The constrained label.
   string label = 3;
   // The property that breaks it.
   string property = 4;
   // The elementId of the node.
   string element_id = 5;
+}
+
+// What a constraint requires.
+message RoutedConstraintKind {
+  // Exactly one is set; none set is unreadable.
+  oneof kind {
+    // No two nodes share the values; a node missing any of them is not
+    // constrained.
+    RoutedNothing unique = 1;
+    // The property is present and not null.
+    RoutedNothing not_null = 2;
+    // Every property is present and not null, and no two nodes share the
+    // values.
+    RoutedNothing node_key = 3;
+    // A present, non-null value has this type.
+    RoutedPropertyType type = 4;
+  }
+}
+
+// A case that carries nothing beyond being named.
+message RoutedNothing {}
+
+// A declared property type, flat: `array_depth` arrays around a base type
+// that is not an array. Flat so a reader bounds the nesting by one number
+// before building anything, with no recursion; a depth past the engine's
+// bound is unreadable.
+message RoutedPropertyType {
+  // How many arrays wrap the base type; 0 for the base type itself.
+  uint32 array_depth = 1;
+  // The base type; exactly one is set.
+  oneof base {
+    // A type that takes no parameters.
+    RoutedScalarType scalar = 2;
+    // A fixed-dimension vector.
+    RoutedVectorType vector = 3;
+    // A value evaluated at query time.
+    RoutedComputedSpec computed = 4;
+  }
+}
+
+// The property types that take no parameters.
+enum RoutedScalarType {
+  // Not a type; unreadable.
+  ROUTED_SCALAR_TYPE_UNSPECIFIED = 0;
+  // UTF-8 text.
+  ROUTED_SCALAR_TYPE_STRING = 1;
+  // 64-bit signed integer.
+  ROUTED_SCALAR_TYPE_INT = 2;
+  // 64-bit float.
+  ROUTED_SCALAR_TYPE_FLOAT = 3;
+  // Boolean.
+  ROUTED_SCALAR_TYPE_BOOL = 4;
+  // Timestamp.
+  ROUTED_SCALAR_TYPE_TIMESTAMP = 5;
+  // A value held in the blob store.
+  ROUTED_SCALAR_TYPE_BLOB = 6;
+  // A map of named values.
+  ROUTED_SCALAR_TYPE_MAP = 7;
+  // A geographic point.
+  ROUTED_SCALAR_TYPE_GEO = 8;
+  // Raw bytes.
+  ROUTED_SCALAR_TYPE_BINARY = 9;
+  // An arbitrary nested document.
+  ROUTED_SCALAR_TYPE_DOCUMENT = 10;
+}
+
+// A vector type.
+message RoutedVectorType {
+  // Its number of dimensions.
+  uint32 dimensions = 1;
+  // How distance between two vectors is measured.
+  RoutedVectorMetric metric = 2;
+}
+
+// Distance metrics of a vector type.
+enum RoutedVectorMetric {
+  // Not a metric; unreadable.
+  ROUTED_VECTOR_METRIC_UNSPECIFIED = 0;
+  // Cosine distance.
+  ROUTED_VECTOR_METRIC_COSINE = 1;
+  // Euclidean distance.
+  ROUTED_VECTOR_METRIC_L2 = 2;
+  // Negated dot product.
+  ROUTED_VECTOR_METRIC_DOT_PRODUCT = 3;
+  // Manhattan distance.
+  ROUTED_VECTOR_METRIC_L1 = 4;
+}
+
+// How a computed property is evaluated at query time.
+message RoutedComputedSpec {
+  // Exactly one is set; none set is unreadable.
+  oneof spec {
+    // A value interpolated from `initial` to `target` over the duration.
+    RoutedDecay decay = 1;
+    // Seconds left before the node or its content is deleted.
+    RoutedTtl ttl = 2;
+    // A multiplier applied to vector similarity scores.
+    RoutedVectorDecay vector_decay = 3;
+  }
+}
+
+// A decaying value.
+message RoutedDecay {
+  // How the weight falls over the duration.
+  RoutedDecayFormula formula = 1;
+  // The value when no time has passed.
+  double initial = 2;
+  // The value once the duration has passed.
+  double target = 3;
+  // The duration, in seconds.
+  uint64 duration_secs = 4;
+  // The TIMESTAMP property elapsed time is measured from.
+  string anchor_field = 5;
+}
+
+// A countdown to deletion.
+message RoutedTtl {
+  // The duration before expiry, in seconds.
+  uint64 duration_secs = 1;
+  // The TIMESTAMP property elapsed time is measured from.
+  string anchor_field = 2;
+  // What expiry deletes.
+  RoutedTtlScope scope = 3;
+  // For a subtree scope, the DOCUMENT property deleted; unset deletes the
+  // anchor field itself.
+  optional string target_field = 4;
+}
+
+// What an expired TTL deletes.
+enum RoutedTtlScope {
+  // Not a scope; unreadable.
+  ROUTED_TTL_SCOPE_UNSPECIFIED = 0;
+  // The property alone.
+  ROUTED_TTL_SCOPE_FIELD = 1;
+  // A DOCUMENT property and everything in it.
+  ROUTED_TTL_SCOPE_SUBTREE = 2;
+  // The node and its edges.
+  ROUTED_TTL_SCOPE_NODE = 3;
+}
+
+// A decaying multiplier of vector similarity.
+message RoutedVectorDecay {
+  // How the weight falls over the duration.
+  RoutedDecayFormula formula = 1;
+  // The duration, in seconds.
+  uint64 duration_secs = 2;
+  // The TIMESTAMP property elapsed time is measured from.
+  string anchor_field = 3;
+}
+
+// How a decay weight falls from 1 to 0 over normalized time t in [0, 1].
+message RoutedDecayFormula {
+  // Exactly one is set; none set is unreadable.
+  oneof formula {
+    // 1 - t.
+    RoutedNothing linear = 1;
+    // e^(-lambda * t).
+    double exponential_lambda = 2;
+    // (1 + t / tau)^(-alpha).
+    RoutedPowerLaw power_law = 3;
+    // 1 before the duration ends, 0 after.
+    RoutedNothing step = 4;
+  }
+}
+
+// The parameters of a power-law decay.
+message RoutedPowerLaw {
+  // Time scale, as a fraction of the duration.
+  double tau = 1;
+  // Decay exponent.
+  double alpha = 2;
 }
 
 // A key column a statement tried to change.
