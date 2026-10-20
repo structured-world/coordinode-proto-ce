@@ -19,14 +19,22 @@ package coordinode.internode.routing;
 // Values (parameters and rows) travel in the engine's own encoding,
 // MessagePack of its value type: both members run the same version, which
 // the version handshake establishes before any call here.
+//
+// A command that ran and failed answers in the message body with its
+// RoutedError, never with a gRPC status: a status from this service means
+// the command did not run (refused before it was read, its
+// `cn-routing-refused` response metadata says why) or that its answer was
+// lost. Every request carries the version of the RoutedError encoding the
+// ingress reads in its `cn-routed-error-codec` metadata (a decimal number);
+// a member with another one refuses the call before reading it.
 service CommandRoutingService {
   // Run one statement at the member that executes it and stream its answer:
   // `admitted` once the statement has its place (in a transaction, behind the
   // commands admitted before it; otherwise at once), then its columns, row
-  // batches, and the statistics that end it. A refusal ends the stream with
-  // the status the statement failed with. An ingress that leaves before the
-  // whole answer reached it aborts the transaction the statement ran in: its
-  // client cannot know what the statement did.
+  // batches, and the statistics that end it, or the error that ends it. An
+  // ingress that leaves before the whole answer reached it aborts the
+  // transaction the statement ran in: its client cannot know what the
+  // statement did.
   rpc Execute(RoutedStatement) returns (stream RoutedStatementFrame);
 
   // Open an interactive transaction at the leader under the ID the client
@@ -159,6 +167,9 @@ message RoutedStatementFrame {
     bytes rows = 3;
     // The statistics that end the answer.
     RoutedStats end = 4;
+    // The failure that ends the answer: a RoutedError in its protobuf
+    // encoding, at most 64 KiB. Rows sent before it are not a result.
+    bytes error = 5;
   }
 }
 
@@ -204,8 +215,12 @@ message RoutedBegin {
   bytes operation = 4;
 }
 
-// Carries nothing: the transaction is open.
-message RoutedBegun {}
+// Whether the transaction is open.
+message RoutedBegun {
+  // Empty when the transaction is open; otherwise why it was not opened, a
+  // RoutedError in its protobuf encoding, at most 64 KiB.
+  bytes error = 1;
+}
 
 // Commit an interactive transaction.
 message RoutedCommit {
@@ -231,12 +246,16 @@ message RoutedExpectation {
   optional uint64 version = 2;
 }
 
-// The commit's receipt.
+// The commit's receipt, or why it failed.
 message RoutedCommitted {
-  // Timestamp every write of the transaction landed at.
+  // Timestamp every write of the transaction landed at; unset when `error`
+  // is set.
   uint64 commit_ts = 1;
   // Log index the commit was applied at; zero when it reported none.
   uint64 applied_index = 2;
+  // Empty when the commit succeeded; otherwise how it failed, a RoutedError
+  // in its protobuf encoding, at most 64 KiB.
+  bytes error = 3;
 }
 
 // Roll back an interactive transaction.
@@ -251,8 +270,12 @@ message RoutedRollback {
   bool abandoned = 3;
 }
 
-// Carries nothing: the rollback is done.
-message RoutedRolledBack {}
+// Whether the rollback is done.
+message RoutedRolledBack {
+  // Empty when the rollback is done; otherwise why it was refused, a
+  // RoutedError in its protobuf encoding, at most 64 KiB.
+  bytes error = 1;
+}
 
 // One call on the records of client operations.
 message RoutedOperation {
@@ -295,6 +318,9 @@ message RoutedOperationAnswer {
     RoutedOutcome outcome = 2;
     // A release or retirement is done.
     RoutedDone done = 3;
+    // The call failed: a RoutedError in its protobuf encoding, at most
+    // 64 KiB.
+    bytes error = 4;
   }
 }
 
@@ -332,3 +358,520 @@ enum RoutedOperationState {
 
 // Carries nothing: the call is done.
 message RoutedDone {}
+
+// A command's failure at the member that ran it, in the database library's
+// error contract: one case per kind of failure, each with every field a
+// caller decides on, so an ingress reports the same failure its own member
+// would. The engine's error objects and their sources stay on the member that
+// raised them. A receiver that meets a case or a value it does not know reads
+// the answer as lost, never as a refusal it guesses at.
+message RoutedError {
+  oneof kind {
+    // The statement is not valid Cypher.
+    ParseFailure parse = 1;
+    // No plan answers the statement.
+    Text plan = 2;
+    // The statement is not meaningful as written.
+    Text semantic = 3;
+    // A session SET named a value its setting cannot take.
+    SettingRefused session_setting = 4;
+    // Arithmetic with no answer, or a call of an unknown function.
+    ArithmeticFailure arithmetic = 5;
+    // A CALL refused before the procedure ran.
+    ProcedureRefused procedure = 6;
+    // The statement asks for something the engine does not do.
+    Text unsupported = 7;
+    // The statement spent its memory limit or deadline, or was cancelled.
+    BudgetSpent budget = 8;
+    // An index cannot answer and the fallback would run outside the budget.
+    IndexUnresolved index_unresolved = 9;
+    // Triggers fired in a chain deeper than its limit.
+    CascadeOverflow cascade_overflow = 10;
+    // One trigger fired more often within one cascade than it allows.
+    CascadeFanoutOverflow cascade_fanout_overflow = 11;
+    // A STRICT label refused a property, or a write set a computed one.
+    Text schema_violation = 12;
+    // An insert named a key a row already holds.
+    DuplicateKey duplicate_key = 13;
+    // A write would give a unique value a second holder.
+    UniqueViolation unique_violation = 14;
+    // A unique index still being built cannot prove a value free.
+    UniquenessUnresolved uniqueness_unresolved = 15;
+    // A write would break a constraint of its label.
+    ConstraintViolation constraint_violation = 16;
+    // A statement tried to change the key of a row.
+    KeyImmutable key_immutable = 17;
+    // A catalog object of the name exists already.
+    CatalogName catalog_object_exists = 18;
+    // A catalog object exists with another definition.
+    CatalogObjectDiffers catalog_object_differs = 19;
+    // A catalog change named a revision the object is not at.
+    CatalogRevisionMismatch catalog_revision_mismatch = 20;
+    // No catalog object of the name exists.
+    CatalogName catalog_object_missing = 21;
+    // The catalog refuses the change in its current state.
+    Text catalog_refused = 22;
+    // No transaction this caller may use is held under the ID.
+    TransactionRef unknown_transaction = 23;
+    // A transaction is open, or recently ended, under the ID.
+    TransactionRef transaction_id_in_use = 24;
+    // The transaction has too many commands waiting.
+    TransactionRef transaction_busy = 25;
+    // A transaction that commits at idle expiry named no operation.
+    TransactionRef operation_required = 26;
+    // The commit names another operation than the transaction's start.
+    TransactionRef operation_differs = 27;
+    // The transaction was committed at idle expiry.
+    TransactionRef committed_on_timeout = 28;
+    // The commit made at idle expiry has an unknown outcome.
+    TransactionRef outcome_unknown = 29;
+    // The transaction ended with nothing of it applied.
+    TransactionAborted transaction_aborted = 30;
+    // OCC validation refused the write.
+    TransactionConflict transaction_conflict = 31;
+    // A declared condition refused the write.
+    InvariantRefused invariant_refused = 32;
+    // A conditioned write found another version of its record.
+    RevisionMismatch revision_mismatch = 33;
+    // The transaction buffered more than it may.
+    TransactionTooLarge transaction_too_large = 34;
+    // Storage sheds writes until compaction catches up.
+    Empty write_backpressure = 35;
+    // A storage endpoint is at its hard capacity limit.
+    CapacityExhausted capacity_exhausted = 36;
+    // A filesystem is below its free-space reserve.
+    StorageFull storage_full = 37;
+    // The member does not lead.
+    NotLeader not_leader = 38;
+    // The member does not run its group's version and is read-only.
+    MemberReadOnly member_read_only = 39;
+    // A read below the MVCC retention horizon.
+    OutsideRetention outside_retention = 40;
+    // A snapshot read whose commits have not landed yet.
+    ReadNotReady read_not_ready = 41;
+    // The client operation stands already; this attempt applied nothing.
+    OperationSettled operation_settled = 42;
+    // The operation belongs to another deployment.
+    ForeignOperation foreign_operation = 43;
+    // A storage failure no case above classifies.
+    Text storage = 44;
+    // A failure inside the database no case above classifies.
+    Text other = 45;
+    // The statement's settings cannot be served together.
+    Text settings_refused = 46;
+    // The read could not be placed or fenced as its settings ask.
+    ReadFence read_fence = 47;
+  }
+}
+
+// A read that could not be fenced.
+message ReadFence {
+  ReadFenceKind kind = 1;
+  // The fence's account of it.
+  string message = 2;
+}
+
+// What stood in the way of a read fence.
+enum ReadFenceKind {
+  READ_FENCE_KIND_UNSPECIFIED = 0;
+  // The member's role does not serve the read preference or concern.
+  READ_FENCE_KIND_ROLE = 1;
+  // The member lags too far behind.
+  READ_FENCE_KIND_STALE = 2;
+  // The fence did not reach its position or lease in time.
+  READ_FENCE_KIND_TIMEOUT = 3;
+}
+
+// Carries nothing: the case is the whole failure.
+message Empty {}
+
+// A failure that is its text.
+message Text {
+  // What failed, for a person to read; possibly cut short at 8 KiB.
+  string message = 1;
+}
+
+// Why a statement is not valid Cypher.
+message ParseFailure {
+  oneof failure {
+    // The grammar refused it.
+    SyntaxError syntax = 1;
+    // It parsed, but cannot be built into a query; the text says why.
+    string invalid = 2;
+  }
+}
+
+// Where and why the grammar refused a statement.
+message SyntaxError {
+  // What the grammar expected; possibly cut short at 8 KiB.
+  string message = 1;
+  // Byte offset of the start of the error in the statement.
+  uint64 start = 2;
+  // Byte offset of its end.
+  uint64 end = 3;
+  // Line number, from 1.
+  uint64 line = 4;
+  // Column number, from 1.
+  uint64 column = 5;
+}
+
+// A session setting and why its value was refused.
+message SettingRefused {
+  // The setting named.
+  string setting = 1;
+  // Why the value was refused.
+  string reason = 2;
+}
+
+// Arithmetic with no answer.
+message ArithmeticFailure {
+  oneof failure {
+    // A call of a function nothing provides: its name.
+    string unknown_function = 1;
+    // Division or modulo by an integer zero.
+    Empty divide_by_zero = 2;
+    // An integer result outside the 64-bit range.
+    Empty long_overflow = 3;
+  }
+}
+
+// A CALL refused before the procedure ran. The fields a kind does not name
+// are empty or zero.
+message ProcedureRefused {
+  ProcedureRefusal kind = 1;
+  // The procedure the call named.
+  string procedure = 2;
+  // The argument refused (missing, of the wrong type, or of an unusable
+  // value).
+  string argument = 3;
+  // The output column the call yielded and the procedure lacks.
+  string column = 4;
+  // The type the argument must have.
+  string expected = 5;
+  // The type, or for an output shape the width, that was found.
+  string found = 6;
+  // Why an argument's value is refused.
+  string reason = 7;
+  // How many inputs or outputs the procedure declares.
+  uint64 declared = 8;
+  // How many arguments the call passed, or values the procedure returned.
+  uint64 given = 9;
+}
+
+// The kinds of a refused procedure call.
+enum ProcedureRefusal {
+  PROCEDURE_REFUSAL_UNSPECIFIED = 0;
+  // No procedure has the name.
+  PROCEDURE_REFUSAL_UNKNOWN = 1;
+  // More arguments than the procedure declares.
+  PROCEDURE_REFUSAL_TOO_MANY_ARGUMENTS = 2;
+  // A required argument left out.
+  PROCEDURE_REFUSAL_MISSING_ARGUMENT = 3;
+  // An argument of the wrong type.
+  PROCEDURE_REFUSAL_ARGUMENT_TYPE = 4;
+  // An argument whose value the procedure cannot use.
+  PROCEDURE_REFUSAL_INVALID_ARGUMENT = 5;
+  // A YIELD of a column the procedure does not produce.
+  PROCEDURE_REFUSAL_UNKNOWN_OUTPUT = 6;
+  // A CALL inside a larger query that yields nothing.
+  PROCEDURE_REFUSAL_YIELD_REQUIRED = 7;
+  // The procedure returned a row of the wrong width.
+  PROCEDURE_REFUSAL_OUTPUT_SHAPE = 8;
+  // A second procedure registered under a taken name.
+  PROCEDURE_REFUSAL_DUPLICATE_NAME = 9;
+}
+
+// What stopped a statement.
+message BudgetSpent {
+  oneof stop {
+    // Its memory limit.
+    MemoryBudget memory = 1;
+    // Its deadline.
+    Empty deadline = 2;
+    // A cancellation.
+    Empty cancelled = 3;
+  }
+}
+
+// A memory reservation refused.
+message MemoryBudget {
+  // Bytes the refused reservation asked for.
+  uint64 requested = 1;
+  // Bytes reserved when it was refused.
+  uint64 used = 2;
+  // The statement's memory limit in bytes.
+  uint64 limit = 3;
+}
+
+// An index that cannot answer.
+message IndexUnresolved {
+  // The indexed label.
+  string label = 1;
+  // The indexed property.
+  string property = 2;
+  // The operator that would have run outside the budget.
+  string operator = 3;
+}
+
+// A trigger chain deeper than its limit.
+message CascadeOverflow {
+  // The depth reached.
+  uint32 current = 1;
+  // The limit.
+  uint32 limit = 2;
+  // The triggers that fired, in firing order.
+  repeated string chain = 3;
+}
+
+// A trigger that fired too often within one cascade.
+message CascadeFanoutOverflow {
+  // The trigger.
+  string trigger = 1;
+  // How often it fired.
+  uint32 count = 2;
+  // The limit.
+  uint32 limit = 3;
+}
+
+// A key a row of the table already holds.
+message DuplicateKey {
+  // The table.
+  string table = 1;
+  // The key, rendered; possibly cut short at 8 KiB.
+  string key = 2;
+  // The elementId of the row that holds it.
+  string element_id = 3;
+}
+
+// A unique value with a holder already.
+message UniqueViolation {
+  // The unique index.
+  string index = 1;
+  // The indexed properties, comma-separated.
+  string property = 2;
+  // The value, rendered; possibly cut short at 8 KiB.
+  string value = 3;
+  // The elementId of the node that holds it.
+  string element_id = 4;
+}
+
+// A unique index that cannot prove a value free yet.
+message UniquenessUnresolved {
+  // The index being built.
+  string index = 1;
+  // The most stored node rows one proof reads.
+  uint64 limit = 2;
+}
+
+// A node that would break a constraint of its label.
+message ConstraintViolation {
+  // The constraint.
+  string constraint = 1;
+  // What it requires, in the engine's encoding of a constraint kind.
+  bytes kind = 2;
+  // The constrained label.
+  string label = 3;
+  // The property that breaks it.
+  string property = 4;
+  // The elementId of the node.
+  string element_id = 5;
+}
+
+// A key column a statement tried to change.
+message KeyImmutable {
+  // The table.
+  string table = 1;
+  // The key column.
+  string column = 2;
+}
+
+// The kinds of catalog objects.
+enum CatalogObjectKind {
+  CATALOG_OBJECT_KIND_UNSPECIFIED = 0;
+  CATALOG_OBJECT_KIND_LABEL = 1;
+  CATALOG_OBJECT_KIND_EDGE_TYPE = 2;
+  CATALOG_OBJECT_KIND_CONSTRAINT = 3;
+  CATALOG_OBJECT_KIND_INDEX = 4;
+  CATALOG_OBJECT_KIND_TRIGGER = 5;
+}
+
+// A catalog object by kind and name.
+message CatalogName {
+  CatalogObjectKind object = 1;
+  // The name.
+  string name = 2;
+}
+
+// A catalog object that exists with another definition.
+message CatalogObjectDiffers {
+  CatalogObjectKind object = 1;
+  // The name.
+  string name = 2;
+  // The revision it is at.
+  uint64 revision = 3;
+}
+
+// A catalog change that named a revision the object is not at.
+message CatalogRevisionMismatch {
+  CatalogObjectKind object = 1;
+  // The name.
+  string name = 2;
+  // The revision the change expected.
+  uint64 expected = 3;
+  // The revision the object is at; absent when it does not exist.
+  optional uint64 current = 4;
+}
+
+// An interactive transaction.
+message TransactionRef {
+  // Its ID, 16 bytes.
+  bytes transaction_id = 1;
+}
+
+// A transaction that ended with nothing of it applied.
+message TransactionAborted {
+  // Its ID, 16 bytes.
+  bytes transaction_id = 1;
+  // Why it ended.
+  TransactionEndReason end = 2;
+}
+
+// Why a transaction ended.
+enum TransactionEndReason {
+  TRANSACTION_END_REASON_UNSPECIFIED = 0;
+  // One of its statements failed.
+  TRANSACTION_END_REASON_STATEMENT_FAILED = 1;
+  // It stayed idle past the idle timeout and was rolled back.
+  TRANSACTION_END_REASON_IDLE_EXPIRED = 2;
+  // It stayed idle and its timeout outcome committed it.
+  TRANSACTION_END_REASON_IDLE_COMMITTED = 3;
+  // It stayed idle and the commit its timeout outcome made was refused.
+  TRANSACTION_END_REASON_IDLE_COMMIT_REFUSED = 4;
+  // It stayed idle and that commit's outcome is unknown.
+  TRANSACTION_END_REASON_IDLE_COMMIT_UNKNOWN = 5;
+  // It was rolled back.
+  TRANSACTION_END_REASON_ROLLED_BACK = 6;
+  // The stream a statement of it ran on was lost.
+  TRANSACTION_END_REASON_STREAM_LOST = 7;
+}
+
+// A write OCC validation refused.
+message TransactionConflict {
+  // The interactive transaction's ID, 16 bytes; empty for a statement that
+  // commits on its own.
+  bytes transaction_id = 1;
+  // What the validation found; possibly cut short at 8 KiB.
+  string message = 2;
+}
+
+// A write a declared condition refused.
+message InvariantRefused {
+  // The interactive transaction's ID, 16 bytes; empty for a statement that
+  // commits on its own.
+  bytes transaction_id = 1;
+  // Which condition refused it; possibly cut short at 8 KiB.
+  string reason = 2;
+}
+
+// A conditioned write that found another version of its record.
+message RevisionMismatch {
+  // The interactive transaction's ID, 16 bytes; empty for a statement that
+  // commits on its own.
+  bytes transaction_id = 1;
+  // The version the write was conditioned on; absent required absence.
+  optional uint64 expected = 2;
+  // The version the record has; absent means it is absent.
+  optional uint64 current = 3;
+}
+
+// A transaction that buffered more than it may.
+message TransactionTooLarge {
+  // Its ID, 16 bytes.
+  bytes transaction_id = 1;
+  // Bytes it buffered.
+  uint64 buffered = 2;
+  // The limit in bytes.
+  uint64 limit = 3;
+}
+
+// A storage endpoint at its hard capacity limit.
+message CapacityExhausted {
+  // The endpoint.
+  string endpoint_id = 1;
+  // Bytes it holds.
+  uint64 used_bytes = 2;
+  // Its hard limit in bytes.
+  uint64 hard_limit_bytes = 3;
+}
+
+// A filesystem below its free-space reserve.
+message StorageFull {
+  // The endpoint path with the least free space.
+  string path = 1;
+  // Free bytes there.
+  uint64 available_bytes = 2;
+  // The reserve writes need.
+  uint64 min_free_bytes = 3;
+}
+
+// A member that does not lead.
+message NotLeader {
+  // The member the group last named leader; absent while none is known.
+  optional uint64 leader_id = 1;
+}
+
+// A member that runs another version than its group.
+message MemberReadOnly {
+  // The engine format version the member runs.
+  uint32 own_engine = 1;
+  // The host format epoch the member runs.
+  uint64 own_host_epoch = 2;
+  // The engine format version its group runs.
+  uint32 group_engine = 3;
+  // The host format epoch its group runs.
+  uint64 group_host_epoch = 4;
+  // The group moved past the member; otherwise the member is ahead.
+  bool behind = 5;
+  // The group's leader as far as the member knows; absent when unknown.
+  optional uint64 leader_id = 6;
+  // That leader's address; empty when the leader is unknown.
+  string leader_address = 7;
+  // The commit timestamp every read the member serves is as of.
+  uint64 as_of = 8;
+}
+
+// A read below the MVCC retention horizon.
+message OutsideRetention {
+  // The timestamp the read asked for.
+  uint64 requested = 1;
+  // The oldest timestamp still readable.
+  uint64 oldest_readable = 2;
+}
+
+// A snapshot read whose commits have not landed yet.
+message ReadNotReady {
+  // The timestamp the read asked for.
+  uint64 requested = 1;
+  // The latest timestamp answerable now; absent when there is none.
+  optional uint64 ready_through = 2;
+}
+
+// A client operation that stands already.
+message OperationSettled {
+  // Its issuer, 16 bytes.
+  bytes issuer = 1;
+  // The issuer's incarnation it belongs to.
+  uint64 incarnation = 2;
+  // Its number within the incarnation.
+  uint64 sequence = 3;
+  // How it stands.
+  RoutedOutcome outcome = 4;
+  // Its committed outcome carries another intent than this attempt.
+  bool intent_differs = 5;
+}
+
+// An operation of another deployment.
+message ForeignOperation {
+  // The deployment its descriptor names, 16 bytes.
+  bytes deployment = 1;
+}
