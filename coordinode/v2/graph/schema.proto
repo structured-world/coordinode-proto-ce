@@ -941,20 +941,12 @@ enum IndexCheckState {
   INDEX_CHECK_STATE_CANCELLED = 5;
 }
 
-// Which half of a check is running.
-enum IndexCheckPhase {
-  // Never sent.
-  INDEX_CHECK_PHASE_UNSPECIFIED = 0;
-  // Every record of the label, checked for the entries its values give it.
-  INDEX_CHECK_PHASE_RECORDS = 1;
-  // Every entry of the generation, checked for a record holding its value.
-  INDEX_CHECK_PHASE_ENTRIES = 2;
-}
-
 // One index generation's integrity and its latest check: the server-owned
 // operation that compares an index with its records, repairs the entries
 // that disagree, and rebuilds the index when the damage is too wide.
 message IndexCheck {
+  reserved 7;
+  reserved "phase";
   // Identity of the check: the generation it checks. Inspected with
   // GetIndexCheck, cancelled with CancelIndexCheck.
   uint64 operation = 1;
@@ -968,9 +960,7 @@ message IndexCheck {
   IndexIntegrity integrity = 5;
   // Where the latest check stands; UNSPECIFIED when none was admitted.
   IndexCheckState state = 6;
-  // Which half a check is in; UNSPECIFIED when none was admitted.
-  IndexCheckPhase phase = 7;
-  // Complete passes over both halves so far.
+  // Complete passes over the records and the entries so far.
   uint32 passes = 8;
   // Records and entries checked so far. Progress, not proof: only VERIFIED
   // is.
