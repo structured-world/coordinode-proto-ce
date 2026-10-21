@@ -140,6 +140,24 @@ message RoutedStatement {
   // Where in the client's code the statement was issued, for the executing
   // member's advisor; absent when the client sent none.
   SourceLocation source = 9;
+  // Present on the first statement of a transaction: the transaction opens
+  // with these settings under `transaction_id`, and the statement runs in it,
+  // in the one call; no separate Begin travels first. A start naming an open
+  // ID is refused before the statement runs.
+  RoutedStart start = 10;
+}
+
+// How the command that starts a transaction opens it.
+message RoutedStart {
+  // Its read concern level and write concern, fixed for its life; the read
+  // position fields are unused.
+  RoutedSettings settings = 1;
+  // What ends it when it stays idle past the idle timeout: 1 rolls it back,
+  // 2 commits it; zero takes the executing member's setting.
+  uint32 timeout_outcome = 2;
+  // The client operation its commit carries out, in the descriptor's byte
+  // form; empty for none. Required to commit it at idle expiry.
+  bytes operation = 3;
 }
 
 // A place in a client's code, with the application that named it.
