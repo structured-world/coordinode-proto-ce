@@ -20,37 +20,92 @@ package coordinode.internode.routing;
 // MessagePack of its value type: both members run the same version, which
 // the version handshake establishes before any call here.
 //
-// A command that ran and failed answers in the message body with its
-// RoutedError, never with a gRPC status: a status from this service means
-// the command did not run (refused before it was read, its
-// `cn-routing-refused` response metadata says why) or that its answer was
-// lost. Every request carries the version of the RoutedError encoding the
-// ingress reads in its `cn-routed-error-codec` metadata (a decimal number);
-// a member with another one refuses the call before reading it.
+// A command that ran and failed answers with its RoutedError, never with a
+// refusal: a refusal means the command did not run. The ingress names the
+// version of the RoutedError encoding it reads in the session's
+// `cn-routed-error-codec` metadata (a decimal number); a member with another
+// one refuses the session before reading any command of it.
 service CommandRoutingService {
-  // Run one statement at the member that executes it and stream its answer:
-  // for a statement of a transaction, `admitted` once it has its place behind
-  // the commands admitted before it; then its columns, row batches, and the
-  // statistics that end it, or the error that ends it, as many events per
-  // frame as were ready together. An
-  // ingress that leaves before the whole answer reached it aborts the
-  // transaction the statement ran in: its client cannot know what the
-  // statement did.
-  rpc Execute(RoutedStatement) returns (stream RoutedStatementFrame);
+  // One long-lived stream between an ingress and a member that carries every
+  // command the ingress routes there and their answers, each tagged with the
+  // ingress's number for the command, so a command costs one message each
+  // way and no call of its own. Commands run concurrently; the order of the
+  // commands of one transaction is kept as for separate calls: the ingress
+  // sends the next only once the previous one is admitted.
+  //
+  // The member rechecks the ingress's admission before each command it
+  // reads. A statement's answer streams in frames, at most as many ahead of
+  // the ingress as the credits it gave, so a slowly read answer holds back
+  // its own statement and no other. When the stream ends, every command
+  // still in flight stops at the member, and a transaction one of them ran in
+  // is aborted; the ingress cannot know what those commands did.
+  rpc Session(stream RoutedRequest) returns (stream RoutedReply);
+}
 
-  // Open an interactive transaction at the leader under the ID the client
-  // drew.
-  rpc Begin(RoutedBegin) returns (RoutedBegun);
+// One message from the ingress on a session.
+message RoutedRequest {
+  // The ingress's number for the command, unique among the session's
+  // commands; the replies to the command carry it.
+  uint64 call = 1;
+  oneof request {
+    // Run a statement. Its answer is a series of frames; the member sends
+    // `FRAMES_AHEAD` (4) of them before it waits for credit.
+    RoutedStatement execute = 2;
+    // Open an interactive transaction at the leader under the ID the client
+    // drew.
+    RoutedBegin begin = 3;
+    // Commit an interactive transaction at the leader.
+    RoutedCommit commit = 4;
+    // Roll back an interactive transaction at the leader.
+    RoutedRollback rollback = 5;
+    // Enroll an issuer, resolve an operation, or release or retire
+    // operation records at the leader, which decides them through the
+    // group's log.
+    RoutedOperation operation = 6;
+    // The ingress took this many more frames of the statement's answer: the
+    // member may send as many more.
+    uint32 credit = 7;
+    // The ingress no longer reads the statement's answer: the statement
+    // stops, and a transaction it ran in is aborted.
+    RoutedCancel cancel = 8;
+  }
+}
 
-  // Commit an interactive transaction at the leader.
-  rpc Commit(RoutedCommit) returns (RoutedCommitted);
+// Carries nothing: the message is the signal.
+message RoutedCancel {}
 
-  // Roll back an interactive transaction at the leader.
-  rpc Rollback(RoutedRollback) returns (RoutedRolledBack);
+// One message from the member on a session.
+message RoutedReply {
+  // The number the ingress gave the command this answers.
+  uint64 call = 1;
+  oneof reply {
+    // Events of a statement's answer; the frame that holds its `end` or
+    // `error` event is its last.
+    RoutedStatementFrame frame = 2;
+    // The answer to a begin.
+    RoutedBegun begun = 3;
+    // The answer to a commit.
+    RoutedCommitted committed = 4;
+    // The answer to a rollback.
+    RoutedRolledBack rolled_back = 5;
+    // The answer to an operation call.
+    RoutedOperationAnswer operation = 6;
+    // The member refused the command before running it: it did not run.
+    RoutedRefusal refused = 7;
+    // The answer broke after it began (a row that could not be encoded):
+    // what the command did is unknown. The text says what broke.
+    string broken = 8;
+  }
+}
 
-  // Enroll an issuer, resolve an operation, or release or retire operation
-  // records at the leader, which decides them through the group's log.
-  rpc Operation(RoutedOperation) returns (RoutedOperationAnswer);
+// Why a member did not run a command.
+message RoutedRefusal {
+  // What was refused: "request" for a command that does not decode,
+  // "admission" for an ingress no longer admitted, "duplicate" for a number
+  // already in flight on the session.
+  string reason = 1;
+  // The member's account of it.
+  string message = 2;
 }
 
 // Who a routed command acts for, as the ingress's authentication or its
