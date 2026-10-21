@@ -29,9 +29,10 @@ package coordinode.internode.routing;
 // a member with another one refuses the call before reading it.
 service CommandRoutingService {
   // Run one statement at the member that executes it and stream its answer:
-  // `admitted` once the statement has its place (in a transaction, behind the
-  // commands admitted before it; otherwise at once), then its columns, row
-  // batches, and the statistics that end it, or the error that ends it. An
+  // for a statement of a transaction, `admitted` once it has its place behind
+  // the commands admitted before it; then its columns, row batches, and the
+  // statistics that end it, or the error that ends it, as many events per
+  // frame as were ready together. An
   // ingress that leaves before the whole answer reached it aborts the
   // transaction the statement ran in: its client cannot know what the
   // statement did.
@@ -155,11 +156,18 @@ message SourceLocation {
   string version = 5;
 }
 
-// One event of a routed statement's answer.
+// The events of a routed statement's answer that were ready together, in
+// order: an answer that fits one batch travels as one message.
 message RoutedStatementFrame {
+  repeated RoutedStatementEvent events = 1;
+}
+
+// One event of a routed statement's answer.
+message RoutedStatementEvent {
   oneof event {
-    // The statement has its place; the ingress may pass the next command of
-    // the same transaction on.
+    // A statement of a transaction has its place; the ingress may pass the
+    // next command of the same transaction on. A statement that commits on
+    // its own waits behind nothing and is answered without it.
     Admitted admitted = 1;
     // The result's column names, before its first rows.
     Columns columns = 2;
