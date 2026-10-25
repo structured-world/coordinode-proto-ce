@@ -546,7 +546,48 @@ message RoutedError {
     // on do not fit the 64 KiB bound. Not a refusal: the receiver reads it as
     // an answer it could not read, whatever the command did.
     Undeliverable undeliverable = 48;
+    // Vectors their metric cannot evaluate: in a vector function, a query
+    // vector or a scored candidate. Nothing was answered.
+    VectorDomain vector_domain = 49;
+    // A write would give a vector index a vector it cannot take. Nothing was
+    // written.
+    VectorRefused vector_refused = 50;
   }
+}
+
+// Why vectors cannot be evaluated under their metric.
+message VectorDomain {
+  oneof failure {
+    // Vectors of different widths.
+    VectorWidths dimension_mismatch = 1;
+    // A vector with no components.
+    Empty empty = 2;
+    // A NaN or infinite component: its position in the vector, from 0.
+    uint64 non_finite_index = 3;
+    // Cosine of a vector whose components are all zero, which has no
+    // direction.
+    Empty zero_vector_cosine = 4;
+  }
+}
+
+// The two widths of a dimension mismatch.
+message VectorWidths {
+  // The width of the vector evaluated.
+  uint64 left = 1;
+  // The width it was compared with: the other vector's, or the index's.
+  uint64 right = 2;
+}
+
+// A write a vector index refused.
+message VectorRefused {
+  // The indexed label.
+  string label = 1;
+  // The indexed property.
+  string property = 2;
+  // The elementId of the node whose vector was refused.
+  string element_id = 3;
+  // What is wrong with the vector.
+  VectorDomain domain = 4;
 }
 
 // An error too large to carry.

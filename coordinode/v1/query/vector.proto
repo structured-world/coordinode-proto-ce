@@ -58,8 +58,16 @@ message VectorSearchResponse {
 }
 
 message VectorResult {
+  // The matched node with its labels and properties.
   coordinode.v1.graph.Node node = 1;
-  float distance = 2;
+  // Field 2 carried the score in single precision.
+  reserved 2;
+  // The node's score under the requested metric, evaluated exactly in IEEE
+  // binary64 over the stored single-precision values: cosine similarity, dot
+  // product, Euclidean (L2) or Manhattan (L1) distance. Results come closest
+  // first: highest similarity or dot product, lowest distance; equal scores in
+  // node id order.
+  double distance = 3;
 }
 
 // Serving health of a vector index: whether it can answer queries at full
