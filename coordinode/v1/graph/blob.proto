@@ -3,14 +3,22 @@ syntax = "proto3";
 package coordinode.v1.graph;
 
 import "google/api/annotations.proto";
+import "coordinode/v1/operation/operation.proto";
 
-// BlobStore service: content-addressed chunk storage for large values.
+// BlobStore service: large objects stored, read and deleted by id.
 //
-// Values >= 4KB are split into 256KB chunks identified by SHA-256 hash.
-// Content-addressing provides automatic deduplication.
+// An object is split into chunks of up to 256KB, each identified by the
+// SHA-256 digest of its bytes. Every upload is its own blob with its own id,
+// even when another blob holds the same bytes; identical chunks are stored
+// once underneath and shared. Deleting a blob ends its hold on its chunks;
+// the storage of chunks no blob, retained history or reader still needs is
+// reclaimed in the background.
+//
+// A member of a group with other members refuses uploads and deletes with
+// FAILED_PRECONDITION, reason BLOB_NOT_REPLICATED: blob bytes are held only on
+// the member that writes them.
 service BlobService {
-  // Upload a blob as a stream of chunks.
-  // Returns the BlobRef (ordered chunk IDs + total size) for later retrieval.
+  // Upload an object as a stream of chunks and store it as a new blob.
   rpc UploadBlob(stream BlobChunk) returns (UploadBlobResponse) {
     option (google.api.http) = {
       post: "/v1/blobs"
@@ -18,14 +26,16 @@ service BlobService {
     };
   }
 
-  // Download a blob by its chunk IDs, returned as a stream of chunks.
+  // Download a blob, returned as a stream of chunks in object order. The
+  // whole blob is read as it stood when the download began, however slowly
+  // the stream is consumed.
   rpc DownloadBlob(DownloadBlobRequest) returns (stream BlobChunk) {
     option (google.api.http) = {
       get: "/v1/blobs/{blob_id}"
     };
   }
 
-  // Delete a blob and its unreferenced chunks.
+  // Delete a blob. Chunks other blobs share stay readable through them.
   rpc DeleteBlob(DeleteBlobRequest) returns (DeleteBlobResponse) {
     option (google.api.http) = {
       delete: "/v1/blobs/{blob_id}"
@@ -42,25 +52,40 @@ service BlobService {
 
 // A single blob chunk in a streaming upload/download.
 message BlobChunk {
-  // Chunk data (up to 256KB per message).
+  // Chunk data (up to 256KB per message). On upload the messages' data,
+  // concatenated in order, is the object; their sizes need not match the
+  // stored chunk size.
   bytes data = 1;
 
   // Chunk sequence number (0-based, for ordering verification).
   uint32 sequence = 2;
+
+  // Upload only, on the first message: the client operation the upload
+  // carries out. The upload then takes effect at most once however the call
+  // is retried, and every attempt names the same blob, so a retry after a
+  // lost answer never leaves a second blob behind. A retry of an operation
+  // that already took effect stores nothing and is refused with
+  // FAILED_PRECONDITION, reason OPERATION_SETTLED; ErrorInfo metadata
+  // `blob_id` names the blob the operation stored. Absent stores the upload
+  // unbound. Set on a later message, it is refused with INVALID_ARGUMENT.
+  coordinode.v1.operation.OperationRef operation = 3;
 }
 
 // Response after a complete blob upload.
 message UploadBlobResponse {
-  // Unique blob identifier (hex-encoded composite of chunk hashes).
+  // The blob's id: 32 lowercase hex digits naming this upload. Two uploads
+  // of the same bytes get different ids.
   string blob_id = 1;
 
-  // Ordered list of SHA-256 chunk hashes (hex, 64 chars each).
+  // The SHA-256 digest of each chunk in object order (hex, 64 chars each),
+  // repeated where the object repeats a chunk.
   repeated string chunk_ids = 2;
 
   // Total size of the uploaded blob in bytes.
   uint64 total_size = 3;
 
-  // Number of chunks that were deduplicated (already existed).
+  // Number of distinct chunks whose bytes the store already held and now
+  // shares instead of storing again.
   uint32 dedup_chunks = 4;
 }
 
@@ -72,19 +97,21 @@ message DownloadBlobRequest {
 
 // Request to delete a blob.
 message DeleteBlobRequest {
-  // Blob identifier.
+  // Blob identifier returned from UploadBlob.
   string blob_id = 1;
 }
 
 // Response after blob deletion.
 message DeleteBlobResponse {
-  // Number of chunks actually deleted (excludes shared chunks still referenced).
+  // Chunks whose storage this call reclaimed. Reclamation happens in the
+  // background once nothing needs a chunk any more, so a delete reports 0;
+  // its effect is that the blob no longer holds its chunks.
   uint32 chunks_deleted = 1;
 }
 
 // Request for blob metadata.
 message GetBlobMetaRequest {
-  // Blob identifier.
+  // Blob identifier returned from UploadBlob.
   string blob_id = 1;
 }
 
@@ -96,9 +123,9 @@ message BlobMeta {
   // Total size in bytes.
   uint64 total_size = 2;
 
-  // Number of chunks.
+  // Number of chunks, counting repeats.
   uint32 chunk_count = 3;
 
-  // Ordered list of SHA-256 chunk hashes.
+  // The SHA-256 digest of each chunk in object order (hex, 64 chars each).
   repeated string chunk_ids = 4;
 }
