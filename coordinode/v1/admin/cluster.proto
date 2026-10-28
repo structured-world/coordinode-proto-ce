@@ -81,6 +81,26 @@ service ClusterService {
       body: "*"
     };
   }
+
+  // Replace a member that can no longer take part with a new node.
+  //
+  // The way back for a member whose vote no copy proves: such a member does
+  // not start, and is never let back under its node id. The new node runs on
+  // its own, empty store and must already be listening; the old member's
+  // store is left as it was. The new node joins as a Learner, and once it
+  // has caught up one membership change makes it a Voter and removes the old
+  // member, whose node identity is retired.
+  //
+  // Returns once the replacement is complete. Each step looks at the
+  // membership first, so a call that failed or was cut short (a deadline,
+  // a lost connection) is resumed by sending the same request again, and a
+  // repeated request adds no second member. Must be called on the leader.
+  rpc ReplaceNode(ReplaceNodeRequest) returns (ReplaceNodeResponse) {
+    option (google.api.http) = {
+      post: "/v1/admin/cluster/replace"
+      body: "*"
+    };
+  }
 }
 
 message GetClusterStatusRequest {}
@@ -245,4 +265,28 @@ message DecommissionNodeResponse {
   // In CE, operator must manually delete data on the decommissioned node.
   // In EE, storage is freed automatically as shard moves complete.
   bool operator_cleanup_required = 3;
+}
+
+// Request to replace a member with a new node.
+message ReplaceNodeRequest {
+  // Numeric node ID of the member being replaced. It need not be running.
+  uint64 old_node_id = 1;
+  // Numeric node ID of the replacement. Must differ from old_node_id: a
+  // member is never let back under the node id it may have broken a
+  // promise under.
+  uint64 new_node_id = 2;
+  // gRPC address of the replacement in "host:port" format.
+  string address = 3;
+  // The node identity the replacement proves on the inter-node channel: its
+  // SPIFFE ID (spiffe://trust-domain/path, compared whole). Required. A
+  // request resumed or repeated must name the same identity.
+  string node_identity = 4;
+}
+
+// Response to ReplaceNode: the replacement is complete.
+message ReplaceNodeResponse {
+  // Numeric node ID of the replaced member, now out of the group.
+  uint64 old_node_id = 1;
+  // Numeric node ID of the replacement, now a Voter.
+  uint64 new_node_id = 2;
 }
