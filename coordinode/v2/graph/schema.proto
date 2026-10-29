@@ -379,6 +379,20 @@ enum SchemaMode {
   SCHEMA_MODE_FLEXIBLE = 3;
 }
 
+// What a label is to the nodes carrying it. A node carries exactly one type
+// label, found by kind whatever order its labels are written in, besides the
+// labels that type implies and any auxiliary labels.
+enum LabelKind {
+  // TYPE.
+  LABEL_KIND_UNSPECIFIED = 0;
+  // The node's type: its definition gives the node's schema, mode and
+  // placement. A label used without a definition is a FLEXIBLE type label.
+  LABEL_KIND_TYPE = 1;
+  // Classifies nodes (scope, role, tag). Declares no properties, is not
+  // temporal and is never a node's only label.
+  LABEL_KIND_AUXILIARY = 2;
+}
+
 // A node label as the catalog holds it.
 message Label {
   // Label name. Case-sensitive.
@@ -404,6 +418,13 @@ message Label {
   // proof puts it in force; every write meanwhile must satisfy both. Unset
   // when no proof is running.
   LabelCandidate candidate = 8;
+  // Whether the label is a node's type or an auxiliary label. Fixed when
+  // the label is created.
+  LabelKind kind = 9;
+  // For a type label, the labels every node of the type carries with it, as
+  // declared, sorted: the server writes them, transitively, on each node.
+  // Empty for an auxiliary label. Fixed when the label is created.
+  repeated string implies = 10;
 }
 
 // A label definition published and being proved over the stored nodes.
@@ -452,6 +473,17 @@ message CreateLabelRequest {
   SchemaMode schema_mode = 4;
   // Whether nodes of the label are bitemporal. Cannot be changed later.
   bool temporal = 5;
+  // A type label or an auxiliary one. An auxiliary label declares no
+  // properties, computed properties, IMPLIES or TEMPORAL; one that stored
+  // nodes carry as their type is refused. Cannot be changed later.
+  LabelKind kind = 6;
+  // For a type label, the labels every node of the type carries with it.
+  // Each must be a type label or have no definition; every property one of
+  // them declares, transitively, must be declared here with the same type;
+  // none may lead back to this label. A label whose stored nodes lack one of
+  // them is refused. Order and repeats do not matter. Cannot be changed
+  // later.
+  repeated string implies = 7;
 }
 
 message ListLabelsRequest {}
@@ -503,6 +535,13 @@ message LabelDeclaration {
   // to this one, provided it is at this revision, the one the client read
   // it at; an absent label or another revision refuses the request.
   optional uint64 expected_revision = 6;
+  // As CreateLabelRequest.kind. A change of an existing label's kind
+  // refuses the request.
+  LabelKind kind = 7;
+  // As CreateLabelRequest.implies; the labels may be declared by the same
+  // request. A change of an existing label's implied labels refuses the
+  // request.
+  repeated string implies = 8;
 }
 
 // An edge type definition in a PublishSchema request.
