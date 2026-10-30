@@ -438,6 +438,18 @@ message LabelCandidate {
   // The operation proving it: awaited with AwaitSchema, cancelled with
   // CancelIndexBuild.
   uint64 operation = 4;
+  // The labels the type implies once the candidate is in force; absent when
+  // the candidate leaves them as they are. Until then the label lookup and
+  // every index covering an affected label are reconciled to the new set
+  // in the background, and the implications in force still apply.
+  LabelCandidateImplies implies = 5;
+}
+
+// The implied labels a candidate puts in force, wrapped so that "no change"
+// (absent) and "implies nothing" (present and empty) are told apart.
+message LabelCandidateImplies {
+  // Label names, sorted, without repeats.
+  repeated string labels = 1;
 }
 
 // An edge type as the catalog holds it.
