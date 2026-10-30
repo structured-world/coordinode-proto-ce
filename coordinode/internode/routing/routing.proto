@@ -552,6 +552,10 @@ message RoutedError {
     // A write would give a vector index a vector it cannot take. Nothing was
     // written.
     VectorRefused vector_refused = 50;
+    // A text index cannot answer until the member maintaining it brings it
+    // in line with its last write. Nothing was answered; the same read
+    // succeeds once it has.
+    TextIndexNotReady text_index_not_ready = 51;
   }
 }
 
@@ -745,6 +749,18 @@ message IndexUnresolved {
   string property = 2;
   // The operator that would have run outside the budget.
   string operator = 3;
+}
+
+// A text index that cannot answer yet.
+message TextIndexNotReady {
+  // The indexed label.
+  string label = 1;
+  // The indexed property.
+  string property = 2;
+  // Why it cannot answer, for a person: its reader has not followed its
+  // last write, or whether that write landed is unknown until the index is
+  // opened again.
+  string reason = 3;
 }
 
 // A trigger chain deeper than its limit.
