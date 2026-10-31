@@ -556,6 +556,9 @@ message RoutedError {
     // in line with its last write. Nothing was answered; the same read
     // succeeds once it has.
     TextIndexNotReady text_index_not_ready = 51;
+    // Values an index cannot hold. Nothing of the write, build or change of
+    // what a type implies holding them took effect.
+    IndexEntryRefused index_entry = 52;
   }
 }
 
@@ -749,6 +752,18 @@ message IndexUnresolved {
   string property = 2;
   // The operator that would have run outside the budget.
   string operator = 3;
+}
+
+// Why an index cannot hold a write's values.
+message IndexEntryRefused {
+  oneof refusal {
+    // An entry's key would take this many bytes, more than the 65535 a key
+    // may take.
+    uint64 key_length = 1;
+    // The values' lists make more entries than one node may take in one
+    // index.
+    Empty fan_out = 2;
+  }
 }
 
 // A text index that cannot answer yet.
