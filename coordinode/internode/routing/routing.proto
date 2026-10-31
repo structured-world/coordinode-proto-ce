@@ -559,6 +559,10 @@ message RoutedError {
     // Values an index cannot hold. Nothing of the write, build or change of
     // what a type implies holding them took effect.
     IndexEntryRefused index_entry = 52;
+    // A read older than the operational retention asked for history that
+    // was never retained: nodes of a type that keeps no history, or a catalog
+    // binding not kept. Nothing was answered; the text names what, and when.
+    Text history_uncovered = 53;
   }
 }
 
