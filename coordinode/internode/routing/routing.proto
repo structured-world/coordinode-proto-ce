@@ -563,7 +563,28 @@ message RoutedError {
     // was never retained: nodes of a type that keeps no history, or a catalog
     // binding not kept. Nothing was answered; the text names what, and when.
     Text history_uncovered = 53;
+    // A write was handed to the replication log and its outcome is unknown:
+    // it may have committed, or may yet. Not a refusal: retrying it blindly
+    // can apply it twice; a write bound to an operation is resolved by it.
+    WriteOutcomeUnknown write_outcome_unknown = 54;
   }
+}
+
+// Why a write handed to the replication log has an unknown outcome.
+message WriteOutcomeUnknown {
+  oneof cause {
+    // The member stopped leading in this term while the write waited for its
+    // quorum; another leader may still commit it.
+    uint64 leadership_lost_term = 1;
+    // The write was not seen committed after this many retries.
+    uint32 not_seen_committed_retries = 2;
+    // The write concern's timeout, in milliseconds, ran out before the write
+    // was acknowledged; the write is not rolled back.
+    uint32 write_concern_timeout_ms = 3;
+  }
+  // The interactive transaction whose commit this was; absent for a
+  // statement committed on its own.
+  TransactionRef transaction = 4;
 }
 
 // Why vectors cannot be evaluated under their metric.
