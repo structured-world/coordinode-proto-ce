@@ -142,17 +142,17 @@ message ReadConcern {
   // HLC microseconds; 0 = no bound.
   //
   // Valid with level MAJORITY or SNAPSHOT (without `at_timestamp`); LOCAL or
-  // LINEARIZABLE with a causal bound is rejected with INVALID_ARGUMENT.
+  // LINEARIZABLE with a causal bound is rejected with FAILED_PRECONDITION.
   // A member that cannot meet the bound yet refuses the read with
-  // FAILED_PRECONDITION, reason READ_NOT_READY, unless `wait_ms` lets it
-  // wait; it never answers from an earlier point.
+  // UNAVAILABLE, reason READ_NOT_READY, unless `wait_ms` lets it wait; it
+  // never answers from an earlier point.
   uint64 after_ts = 4;
 
   // Causal position: the read is served only where this history has applied
   // the entry, typically a write's `CausalReceipt.position`. A position of
   // another history than the serving member's (another deployment or group,
   // or a standalone server, which has no log) is rejected with
-  // INVALID_ARGUMENT. Same rules as `after_ts` otherwise.
+  // FAILED_PRECONDITION. Same rules as `after_ts` otherwise.
   HistoryPosition after_position = 5;
 
   // How long, in milliseconds, the read may wait for a causal bound the
