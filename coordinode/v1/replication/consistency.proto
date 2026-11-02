@@ -92,25 +92,74 @@ enum ReadConcernLevel {
   READ_CONCERN_LEVEL_SNAPSHOT = 4;
 }
 
+// The consensus history a log position counts entries of: one group of one
+// deployment. Positions of different histories are not comparable, and a
+// deployment formed anew is a different history even for the same group.
+message HistoryId {
+  // The deployment's identity, 16 bytes, as the serving member reports it.
+  bytes deployment = 1;
+  // The group within the deployment.
+  uint64 group = 2;
+}
+
+// A position in one history's log.
+message HistoryPosition {
+  // The history `index` counts entries of.
+  HistoryId history = 1;
+  // The log index.
+  uint64 index = 2;
+}
+
+// What a completed statement tells its caller for later causal reads. A
+// causal session keeps the largest `operation_time` it has received and
+// passes it as `ReadConcern.after_ts`.
+message CausalReceipt {
+  // For a write, the commit timestamp of its own writes; for a read, the
+  // timestamp its view was taken at: every commit at or below it that was
+  // visible to the read. HLC microseconds. Zero when the statement has none:
+  // a write answered before it committed (a volatile journal level, or
+  // `acks: 0`), which gives no causal dependency to wait for.
+  uint64 operation_time = 1;
+  // Where the write's own entry is in its history's log. Absent for a read,
+  // and outside a replicated group.
+  HistoryPosition position = 2;
+}
+
 // Read concern configuration.
 message ReadConcern {
+  // Field 2 carried an unqualified log index as the causal bound; it is
+  // replaced by `after_ts` and the history-qualified `after_position`.
+  reserved 2;
+  reserved "after_index";
+
   // Consistency level for this read. UNSPECIFIED defaults to LOCAL.
   ReadConcernLevel level = 1;
 
-  // Causal fence: wait until the serving node has applied log entries up to
-  // at least this Raft log index before executing the read.
+  // Causal lower bound (afterClusterTime): the read is taken at a timestamp
+  // at or after this one, where every commit at or below it is applied. Set
+  // to the largest `CausalReceipt.operation_time` the session has received,
+  // from writes and reads alike, for read-your-writes and monotonic reads.
+  // HLC microseconds; 0 = no bound.
   //
-  // Set to the `QueryStats.applied_index` value from a prior write response
-  // to guarantee read-your-writes: the read is guaranteed to observe all
-  // mutations up to and including that write.
-  //
-  // 0 = no fence (default). Only valid with level = MAJORITY or SNAPSHOT;
-  // returns FAILED_PRECONDITION if level = LOCAL or LINEARIZABLE.
-  //
-  // Has no effect in standalone (non-Raft) mode — all writes are immediately
-  // visible. The returned applied_index will always be 0 in standalone mode,
-  // so clients should not set after_index unless operating in cluster mode.
-  uint64 after_index = 2;
+  // Valid with level MAJORITY or SNAPSHOT (without `at_timestamp`); LOCAL or
+  // LINEARIZABLE with a causal bound is rejected with INVALID_ARGUMENT.
+  // A member that cannot meet the bound yet refuses the read with
+  // FAILED_PRECONDITION, reason READ_NOT_READY, unless `wait_ms` lets it
+  // wait; it never answers from an earlier point.
+  uint64 after_ts = 4;
+
+  // Causal position: the read is served only where this history has applied
+  // the entry, typically a write's `CausalReceipt.position`. A position of
+  // another history than the serving member's (another deployment or group,
+  // or a standalone server, which has no log) is rejected with
+  // INVALID_ARGUMENT. Same rules as `after_ts` otherwise.
+  HistoryPosition after_position = 5;
+
+  // How long, in milliseconds, the read may wait for a causal bound the
+  // serving member does not meet yet. 0 = no waiting: the read is refused as
+  // not ready at once. The wait never lowers the bound: when it runs out the
+  // read is refused the same way.
+  uint32 wait_ms = 6;
 
   // Snapshot pin: read the database as of this HLC timestamp (microseconds
   // since Unix epoch, leader-assigned).
@@ -120,12 +169,12 @@ message ReadConcern {
   // level applies).
   //
   // Typical use: time-travel reads ("what did this query return at 2026-05-15
-  // 12:00:00?"). The timestamp must be within the MVCC retention window —
+  // 12:00:00?"). The timestamp must be within the MVCC retention window;
   // older snapshots are GC'd. Reads beyond retention return UNAVAILABLE.
   //
-  // Distinct from `after_index`: `after_index` is a *fence* (wait until at
-  // least this index is applied), `at_timestamp` is a *pin* (read exactly
-  // this version, no waiting).
+  // Distinct from `after_ts`: `after_ts` is a lower bound (any eligible view
+  // at or after it), `at_timestamp` is a pin (read exactly this version).
+  // The two are mutually exclusive.
   uint64 at_timestamp = 3;
 }
 

@@ -198,8 +198,8 @@ message Execute {
   // Read concern of this statement alone. Absent, the statement takes the
   // session's (set by Configure), and a session that set none the server's
   // configured default. Within the message, a level of
-  // READ_CONCERN_LEVEL_UNSPECIFIED and a zero after_index or at_timestamp
-  // likewise leave that part to the session. Refused with INVALID_ARGUMENT on
+  // READ_CONCERN_LEVEL_UNSPECIFIED, a zero after_ts, wait_ms or at_timestamp
+  // and an absent after_position likewise leave that part to the session. Refused with INVALID_ARGUMENT on
   // a statement inside a transaction, which runs under the settings fixed at
   // its Begin.
   optional coordinode.v1.replication.ReadConcern read_concern = 5;
@@ -443,16 +443,16 @@ message RowBatch {
 // Closes a result cursor.
 message CursorEnd {
   // Final query statistics for the request. Reuses the unary query stats so the
-  // causal applied-index and write counts decode identically.
+  // causal receipt and write counts decode identically.
   coordinode.v1.query.QueryStats stats = 1;
 }
 
 // Acknowledges Commit.
 message Committed {
-  // Raft log index the commit was applied at on the serving node: the causal
-  // operationTime token a client passes as after_index on later causal reads.
-  // Zero in embedded mode (no Raft cluster).
-  uint64 applied_index = 1;
+  // Field 1 carried the commit's log index unqualified by its history;
+  // `position` replaces it.
+  reserved 1;
+  reserved "applied_index";
 
   // HLC commit timestamp (microseconds since the Unix epoch) every mutation of
   // the transaction was applied at. Server-assigned. Equal to the storage
@@ -460,8 +460,14 @@ message Committed {
   // `AS OF TIMESTAMP <commit_ts>` sees this transaction and nothing committed
   // later; a change-stream consumer that has processed it resumes from
   // `commit_ts + 1`. Present in every mode; a read-only transaction reports
-  // its pinned read timestamp.
+  // its pinned read timestamp. It is the transaction's causal operation
+  // time: a causal session folds it into the `after_ts` of what follows.
   uint64 commit_ts = 2;
+
+  // Where the commit's entry is in its history's log, for a causal read
+  // bounded by `ReadConcern.after_position`. Absent outside a replicated
+  // group and for a transaction that wrote nothing.
+  coordinode.v1.replication.HistoryPosition position = 3;
 }
 
 // Reports an error for a request.

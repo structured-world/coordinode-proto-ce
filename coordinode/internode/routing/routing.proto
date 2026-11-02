@@ -137,12 +137,23 @@ message Principal {
 // ingress's defaults named them. A setting left unset here takes the
 // executing member's own.
 message RoutedSettings {
+  // Field 2 carried a log index unqualified by its history; `after_ts` and
+  // `after_position` replace it.
+  reserved 2;
+  reserved "after_index";
+
   // Read concern level, numbered as coordinode.v1.replication.ReadConcernLevel
   // (1 local, 2 majority, 3 linearizable, 4 snapshot); zero takes the
   // executing member's default.
   uint32 read_concern_level = 1;
-  // Log index the read waits for; zero waits for none.
-  uint64 after_index = 2;
+  // Causal lower bound: the read is taken where every commit at or below
+  // this timestamp is applied; zero is no bound.
+  uint64 after_ts = 8;
+  // Causal position in one history's log; absent is no bound.
+  RoutedPosition after_position = 9;
+  // How long the read may wait for a causal bound not met yet, in
+  // milliseconds; zero refuses it as not ready at once.
+  uint32 causal_wait_ms = 10;
   // Timestamp a snapshot read is pinned to; zero pins none.
   uint64 at_timestamp = 3;
   // When a write is acknowledged; absent takes the executing member's
@@ -157,6 +168,16 @@ message RoutedSettings {
   // Memory limit of the statement in bytes; absent takes the executing
   // member's setting.
   optional uint64 query_memory_limit = 7;
+}
+
+// A position in one history's log.
+message RoutedPosition {
+  // The deployment the history belongs to, 16 bytes.
+  bytes deployment = 1;
+  // The group within it.
+  uint64 group = 2;
+  // The log index.
+  uint64 index = 3;
 }
 
 // When a write is acknowledged.
@@ -277,6 +298,9 @@ message RoutedStats {
   uint64 read_index = 8;
   // What a read on a read-only member is as of; zero otherwise.
   uint64 read_as_of_ts = 9;
+  // The timestamp the statement read at: every commit at or below it that
+  // its view held; zero for none.
+  uint64 read_ts = 10;
 }
 
 // Open an interactive transaction.
@@ -646,6 +670,9 @@ enum ReadFenceKind {
   READ_FENCE_KIND_STALE = 2;
   // The fence did not reach its position or lease in time.
   READ_FENCE_KIND_TIMEOUT = 3;
+  // The read's causal bound is not met on the member, at once or after the
+  // wait the read allowed.
+  READ_FENCE_KIND_NOT_READY = 4;
 }
 
 // Carries nothing: the case is the whole failure.
