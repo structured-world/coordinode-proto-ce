@@ -591,6 +591,9 @@ message RoutedError {
     // it may have committed, or may yet. Not a refusal: retrying it blindly
     // can apply it twice; a write bound to an operation is resolved by it.
     WriteOutcomeUnknown write_outcome_unknown = 54;
+    // The member, or the command's session, runs as many commands at once as
+    // it takes. Nothing of the command ran; it may be sent again.
+    Empty member_busy = 55;
   }
 }
 
