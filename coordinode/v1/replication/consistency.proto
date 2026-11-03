@@ -158,7 +158,13 @@ message ReadConcern {
   // How long, in milliseconds, the read may wait for a causal bound the
   // serving member does not meet yet. 0 = no waiting: the read is refused as
   // not ready at once. The wait never lowers the bound: when it runs out the
-  // read is refused the same way.
+  // read is refused the same way. It lasts no longer than the call: the
+  // call's deadline ends it with DEADLINE_EXCEEDED, reason
+  // QUERY_DEADLINE_EXCEEDED, and cancelling the call or the session statement
+  // with CANCELLED, reason QUERY_CANCELLED. The server sets no limit of its
+  // own on it. A waiting read holds one of the member's command places, so a
+  // member out of them refuses a further command before it runs with
+  // RESOURCE_EXHAUSTED, reason MEMBER_BUSY.
   uint32 wait_ms = 6;
 
   // Snapshot pin: read the database as of this HLC timestamp (microseconds
