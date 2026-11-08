@@ -157,7 +157,8 @@ message SubscribeRequest {
   CdcFilters filters = 2;
 
   // The consumer this stream reads as: globally unique, chosen by the client.
-  // Required.
+  // Required, non-empty and at most 65525 bytes of UTF-8; a longer id is
+  // refused with INVALID_ARGUMENT.
   string consumer_id = 3;
 
   // 0 registers the consumer anew with `retention`, starting at
