@@ -594,6 +594,10 @@ message RoutedError {
     // The member, or the command's session, runs as many commands at once as
     // it takes. Nothing of the command ran; it may be sent again.
     Empty member_busy = 55;
+    // No majority of the group's members holds room for the write next to
+    // the writes already in flight to them. Nothing was written; it may be
+    // sent again once they apply what they hold.
+    Empty members_full = 56;
   }
 }
 
