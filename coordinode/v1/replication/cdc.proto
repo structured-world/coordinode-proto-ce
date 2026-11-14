@@ -23,22 +23,23 @@ service ChangeStreamService {
   // Every stream reads as a registered consumer: the request names the
   // consumer and either registers it with an explicit retention policy
   // (`incarnation` 0) or resumes a live registration (`incarnation` from the
-  // first stream). The registration outlives the connection: a STRICT one
-  // until CancelSubscription, a BOUNDED one until a declared bound is
-  // crossed. The response's initial metadata carries the registration's
-  // incarnation as `x-coordinode-consumer-incarnation`.
+  // first stream). The registration outlives the connection until
+  // CancelSubscription. The response's initial metadata carries the
+  // registration's incarnation as `x-coordinode-consumer-incarnation`.
   //
-  // A token whose position the log no longer holds is refused with
-  // FAILED_PRECONDITION and ErrorInfo reason RETENTION_LOST (metadata
-  // `requested_index`, `first_retained_index`): the stream never resumes past
-  // a gap. A registration that has ended is refused with FAILED_PRECONDITION
-  // and reason CONSUMER_TERMINATED (metadata `incarnation`, `reason`,
+  // A position the log no longer holds is refused with FAILED_PRECONDITION
+  // and ErrorInfo reason RETENTION_LOST (metadata `requested_index`,
+  // `first_retained_index`): the stream never resumes past a gap, and never
+  // jumps to the newest entry in its place. An ORDINARY consumer that gets it
+  // rebuilds its state and acknowledges a position the log holds. A
+  // registration that has ended is refused with FAILED_PRECONDITION and
+  // reason CONSUMER_TERMINATED (metadata `incarnation`, `reason`,
   // `checkpoint`); registering the id again starts a new incarnation.
   //
-  // Sending an event is not delivery: the registration keeps every entry
-  // from its acknowledged position on, so a stream resumed without a token
-  // starts there and re-sends what the client never acknowledged. A resume
-  // token chooses where reading starts and releases nothing.
+  // Sending an event is not delivery: a stream resumed without a token starts
+  // at the acknowledged position and re-sends what the client never
+  // acknowledged, while the log still holds it. A resume token chooses where
+  // reading starts and releases nothing.
   rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
 
   // State that the client holds, durably, every event of its subscription
@@ -58,36 +59,28 @@ service ChangeStreamService {
   rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse);
 }
 
-// How long a consumer's registration protects the history it still needs.
+// Whether a consumer's registration protects the history it still needs.
 // One of the two must be chosen; there is no default.
 message ConsumerRetention {
+  reserved 2;
+  reserved "bounded";
+
   oneof policy {
     // Protection lasts until the consumer is cancelled. Missing heartbeats
-    // do not end it.
+    // do not end it, and the log keeps every entry from the acknowledged
+    // position on.
     StrictRetention strict = 1;
-    // Protection ends once one of the declared bounds is crossed.
-    BoundedRetention bounded = 2;
+    // No protection: the registration records the acknowledged position
+    // only, and the log's own retention decides how far back it reaches.
+    OrdinaryRetention ordinary = 3;
   }
 }
 
 // Protection until cancellation.
 message StrictRetention {}
 
-// Finite bounds after which the registration ends. Both limits are required
-// and must be above zero.
-message BoundedRetention {
-  // Most age, in milliseconds, of the oldest log entry the consumer has not
-  // yet been sent.
-  uint64 max_progress_lag_ms = 1;
-
-  // Most bytes of log the consumer's position may require the shard to keep.
-  uint64 max_retained_bytes = 2;
-
-  // Longest time, in milliseconds, without the consumer being connected and
-  // heartbeating. Absent: the registration does not end for being absent,
-  // only for the two limits above.
-  optional uint64 liveness_timeout_ms = 3;
-}
+// Progress only, holding no history.
+message OrdinaryRetention {}
 
 message CancelSubscriptionRequest {
   // The consumer to cancel.
