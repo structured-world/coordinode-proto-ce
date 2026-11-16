@@ -123,15 +123,19 @@ message AcknowledgeSubscriptionResponse {}
 // label; present and empty follows none. The same for `edge_types`.
 message ChangeInterest {
   // Labels whose nodes the subscription follows: a node event reaches it
-  // when the node carries one of them before or after the event. A name is
-  // bound to the label it names when the subscription opens. A label not
-  // bound is refused with INVALID_ARGUMENT, one a type implies with
-  // UNIMPLEMENTED.
+  // when the node carries one of them before or after the event, its type's
+  // implied labels included. A name is bound to the label it names when the
+  // subscription opens; one not bound is refused with INVALID_ARGUMENT.
   NameList labels = 1;
 
   // Relationship types whose relationships the subscription follows, by
   // name.
   NameList edge_types = 2;
+
+  // Whether the subscription follows blob objects: what each owner (a
+  // stored object, an S3 object, a node's large property) holds, put and
+  // removed. They belong to no label.
+  bool blobs = 3;
 }
 
 // A list of names, present even when empty.
@@ -239,6 +243,9 @@ message LogicalChange {
     // node event of its own. `labels_before` and `labels_after` name the
     // type and what it implied before and implies after.
     ScopeTarget scope = 11;
+    // What a blob owner holds, by its owner key: a PUT carries the owner
+    // record (the blob it now holds, not the blob's bytes), a REMOVE none.
+    bytes blob_owner = 12;
   }
 
   // The record or properties a PUT writes, or the delta a PATCH applies, in
