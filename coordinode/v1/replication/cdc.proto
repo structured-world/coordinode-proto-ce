@@ -150,7 +150,10 @@ message SubscribeRequest {
   bytes cursor = 1;
 
   // What the subscription follows; with a cursor, the interest it was read
-  // with.
+  // with, by the names its labels were created under. A cursor keeps the
+  // labels it was read with: when one of them was dropped and its name
+  // created again, the stream still reads the dropped label, its DROP
+  // included, and not the new one.
   ChangeInterest interest = 2;
 
   // The consumer this stream reads as: globally unique, chosen by the client.
