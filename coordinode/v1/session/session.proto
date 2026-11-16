@@ -99,21 +99,21 @@ message Subscribe {
   // change-stream service's Subscribe takes it.
   coordinode.v1.replication.SubscribeRequest request = 1;
 
-  // Events the client can take before its first Credit frame. Zero sends
-  // nothing until a Credit arrives.
+  // Log entries the client can take before its first Credit frame. Zero
+  // sends nothing until a Credit arrives.
   uint32 credit = 2;
 }
 
-// More credit for a subscription of this session: the server sends that many
-// more events on it. Unused credit accumulates; each event sent, a progress
-// event included, uses one. A subscription without credit sends nothing and
-// holds no part of the session's flow-control window, so it never delays the
-// other requests of the session.
+// More credit for a subscription of this session: the server reads that many
+// more log entries for it. Unused credit accumulates; each entry a batch
+// passes uses one, whether or not it carried a unit. A subscription without
+// credit sends nothing and holds no part of the session's flow-control
+// window, so it never delays the other requests of the session.
 message Credit {
   // request_id of the Subscribe frame that opened the subscription.
   uint64 target_request_id = 1;
 
-  // Events added to the subscription's credit. Above zero.
+  // Log entries added to the subscription's credit. Above zero.
   uint32 events = 2;
 }
 
@@ -335,7 +335,8 @@ message ServerFrame {
     ConnectionStatus connection_status = 8;
     // Acknowledges Subscribe, carrying the registration's incarnation.
     Subscribed subscribed = 9;
-    // Events of a subscription, in log order, at most the credit left.
+    // Units of a subscription, in log order, from at most the credit left of
+    // log entries.
     ChangeEventBatch change_events = 10;
     // Acknowledges an acknowledge frame.
     Acknowledged acknowledged = 11;
@@ -352,13 +353,12 @@ message Subscribed {
   uint64 incarnation = 1;
 }
 
-// Change events of one subscription, oldest first, as many as were ready and
-// the credit allowed. Each event carries its own position, as on the
-// change-stream service.
+// Units of one subscription, oldest first, from as many log entries as were
+// ready and the credit allowed.
 message ChangeEventBatch {
-  // The events, each as the change-stream service sends it; a progress event
-  // (no ops) lets the client acknowledge past entries its filters dropped.
-  repeated coordinode.v1.replication.ChangeEvent events = 1;
+  // The units and the cursor after them, as the change-stream service sends
+  // them.
+  coordinode.v1.replication.ChangeBatch batch = 1;
 
   // True when entries the serving node had already applied were waiting past
   // this batch when it was cut, because the credit ran out: granting more

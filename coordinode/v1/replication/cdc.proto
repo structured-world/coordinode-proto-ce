@@ -2,23 +2,31 @@ syntax = "proto3";
 
 package coordinode.v1.replication;
 
-// CE Change Data Capture: tail a shard's Raft log via gRPC server-side
-// streaming.
+// CE Change Data Capture: the committed changes of a shard as logical
+// events, streamed from its Raft log via gRPC server-side streaming.
 //
-// Client reconnects with a ResumeToken to continue from a position it chose.
-// At-least-once delivery. History is released only up to a position the
+// Each committed transaction is a unit; each of its effects is an event: a
+// put, patch or removal of a node, a relationship's presence, its
+// properties, or one version or discriminated instance of it. The client
+// keeps an opaque cursor and reconnects with it to continue where it chose.
+// At-least-once delivery. History is released only up to a cursor the
 // client acknowledges with AcknowledgeSubscription.
 service ChangeStreamService {
   // Open a long-lived server-side streaming RPC that tails the Raft log.
   //
-  // The server streams a ChangeEvent for each log entry once the serving node
-  // has applied it; entries that are not committed yet are never sent. When
-  // caught up, the stream waits until the node applies another entry. The
-  // stream stays open until the client cancels or the connection drops.
+  // The server streams ChangeBatch messages, each with whole units, once the
+  // serving node has applied their log entries; entries that are not
+  // committed yet are never sent. Every unit the stream passes is in a
+  // batch, one with no event the interest takes too. When caught up, the
+  // stream waits until the node applies another entry. The stream stays
+  // open until the client cancels or the connection drops.
   //
-  // On reconnect, pass the last received ResumeToken to resume without gaps.
-  // Omit resume_token (or set all fields to zero) to start from the oldest
-  // retained entry.
+  // On reconnect, pass the cursor of the last batch received to resume
+  // without gaps. Omit it to start where the registration stands: its
+  // acknowledged position, or the oldest retained entry for a new one. A
+  // cursor binds the history, the event interpretation and the interest it
+  // was read with: one of another history or interpretation, or read with
+  // another interest than the request's, is refused with INVALID_ARGUMENT.
   //
   // Every stream reads as a registered consumer: the request names the
   // consumer and either registers it with an explicit retention policy
@@ -36,20 +44,24 @@ service ChangeStreamService {
   // reason CONSUMER_TERMINATED (metadata `incarnation`, `reason`,
   // `checkpoint`); registering the id again starts a new incarnation.
   //
-  // Sending an event is not delivery: a stream resumed without a token starts
-  // at the acknowledged position and re-sends what the client never
-  // acknowledged, while the log still holds it. A resume token chooses where
+  // A unit the stream cannot project (a change recorded without the context
+  // that says what it means) fails the stream with FAILED_PRECONDITION and
+  // ErrorInfo reason CHANGE_FEED_UNSUPPORTED; the stream does not pass it.
+  //
+  // Sending a batch is not delivery: a stream resumed without a cursor
+  // starts at the acknowledged position and re-sends what the client never
+  // acknowledged, while the log still holds it. A cursor chooses where
   // reading starts and releases nothing.
-  rpc Subscribe(SubscribeRequest) returns (stream ChangeEvent);
+  rpc Subscribe(SubscribeRequest) returns (stream ChangeBatch);
 
-  // State that the client holds, durably, every event of its subscription
-  // before `position`: the registration may stop protecting that history,
-  // and a stream resumed without a token starts at `position`. Only this
-  // call releases history; acknowledging an earlier position than a
-  // previous one changes nothing. Refused with INVALID_ARGUMENT for a
-  // position past what the serving node has applied (nothing that far was
-  // sent) or for another shard, and like CancelSubscription for an ended or
-  // unknown incarnation.
+  // State that the client holds, durably, every unit of its subscription
+  // before `cursor`: the registration may stop protecting that history, and
+  // a stream resumed without a cursor starts there. Only this call releases
+  // history; acknowledging an earlier cursor than a previous one changes
+  // nothing. Refused with INVALID_ARGUMENT for a cursor past what the
+  // serving node has applied (nothing that far was sent) or of another
+  // history, and like CancelSubscription for an ended or unknown
+  // incarnation.
   rpc AcknowledgeSubscription(AcknowledgeSubscriptionRequest) returns (AcknowledgeSubscriptionResponse);
 
   // End a consumer's registration: it stops holding the log, and its
@@ -100,129 +112,183 @@ message AcknowledgeSubscriptionRequest {
   // Its incarnation, from the Subscribe response metadata.
   uint64 incarnation = 2;
 
-  // The `position` of the last event the client no longer needs the source
-  // for: it holds the events durably, or it has durably taken their effect
-  // into the state it keeps (for example by reading the current state at a
-  // snapshot that covers this position). Everything up to it is
-  // acknowledged: the server may release that source for this consumer, a
-  // resume continues after it, and a BOUNDED consumer's progress lag is
-  // measured from it.
-  ResumeToken position = 3;
+  // The `cursor` of the last batch the client no longer needs the source
+  // for: it holds the units durably, or it has durably taken their effect
+  // into the state it keeps. Everything before it is acknowledged: the
+  // server may release that source for this consumer, and a resume without
+  // a cursor continues from it.
+  bytes cursor = 3;
 }
 
 message AcknowledgeSubscriptionResponse {}
 
-// Position in a shard's Raft log used to resume after disconnect.
-//
-// The token names one log index, `segment_id + entry_offset`: the next entry
-// to deliver. It stays valid when the server rewrites its log files.
-message ResumeToken {
-  // Shard this stream targets. Always 0 in CE single-shard mode.
-  uint32 shard_id = 1;
+// What a subscription follows. Absent `labels` follows the nodes of every
+// label; present and empty follows none. The same for `edge_types`.
+message ChangeInterest {
+  // Labels whose nodes the subscription follows: a node event reaches it
+  // when the node carries one of them before or after the event. A name is
+  // bound to the label it names when the subscription opens. A label not
+  // bound is refused with INVALID_ARGUMENT, one a type implies with
+  // UNIMPLEMENTED.
+  NameList labels = 1;
 
-  // Log index of the first entry of the segment that held the last delivered
-  // entry. 0 together with `entry_offset` 0 means "the oldest retained entry".
-  uint64 segment_id = 2;
-
-  // Entries of that segment already delivered, counted from `segment_id`.
-  uint64 entry_offset = 3;
+  // Relationship types whose relationships the subscription follows, by
+  // name.
+  NameList edge_types = 2;
 }
 
-// Filters applied server-side before streaming events to the client.
-message CdcFilters {
-  // If non-empty, only deliver events that touch at least one adjacency or
-  // edge-property key whose edge type matches one of these strings.
-  // Example: ["FOLLOWS", "LIKES"]
-  // Leave empty to receive all edge types.
-  repeated string edge_types = 1;
-
-  // When set: only deliver events whose `is_migration` flag equals this value.
-  // When absent (HasField returns false): deliver both migration and non-migration events.
-  optional bool is_migration = 2;
+// A list of names, present even when empty.
+message NameList {
+  // The names.
+  repeated string names = 1;
 }
 
 message SubscribeRequest {
-  // Token from the last received ChangeEvent.position.
-  // Omit (all-zero) to start from the oldest retained entry.
-  ResumeToken resume_token = 1;
+  // The cursor of the last batch received. Omit to start where the
+  // registration stands.
+  bytes cursor = 1;
 
-  // Optional filter to reduce bandwidth.
-  CdcFilters filters = 2;
+  // What the subscription follows; with a cursor, the interest it was read
+  // with.
+  ChangeInterest interest = 2;
 
   // The consumer this stream reads as: globally unique, chosen by the client.
   // Required, non-empty and at most 65525 bytes of UTF-8; a longer id is
   // refused with INVALID_ARGUMENT.
   string consumer_id = 3;
 
-  // 0 registers the consumer anew with `retention`, starting at
-  // `resume_token` (or the oldest retained entry without one); refused with
-  // ALREADY_EXISTS while another incarnation of the id is live. Any other
-  // value resumes that live incarnation, and `retention` is ignored.
+  // 0 registers the consumer anew with `retention`, starting at `cursor` (or
+  // the oldest retained entry without one); refused with ALREADY_EXISTS
+  // while another incarnation of the id is live. Any other value resumes
+  // that live incarnation, and `retention` is ignored.
   uint64 incarnation = 4;
 
   // Required when registering (`incarnation` 0).
   ConsumerRetention retention = 5;
 }
 
-// A single applied Raft log entry delivered to the CDC consumer.
-message ChangeEvent {
-  // HLC commit timestamp of the entry, in wall-clock microseconds since the
-  // Unix epoch with logical increments inside one microsecond: the latest
-  // commit timestamp of the transactions it carries. 0 for an entry that
-  // carries none (membership, leader blank).
-  uint64 ts = 1;
+// Whole units read from the log, and where the stream continues after them.
+message ChangeBatch {
+  // The units, in log order. Empty for a batch whose entries carried no
+  // unit; the batch still moves `cursor`.
+  repeated ChangeUnit units = 1;
 
-  // Term of the leader that wrote this entry.
-  uint64 term = 2;
-
-  // Raft log index. Monotonically increasing per shard.
-  uint64 log_index = 3;
-
-  // Shard that produced this entry.
-  uint32 shard_id = 4;
-
-  // True if this entry was written during a shard migration (e.g. bulk data
-  // transfer). Most CDC consumers should skip migration entries.
-  bool is_migration = 5;
-
-  // The mutations carried by this log entry. Empty for an entry that carries
-  // none, and for a progress event: entries up to `position` held nothing
-  // the stream's filters keep, so the client can acknowledge past them.
-  repeated ChangeOp ops = 6;
-
-  // Where the stream continues after this event: pass it on reconnect to
-  // resume here, and to AcknowledgeSubscription once the event is held.
-  ResumeToken position = 7;
+  // Where the stream continues after this batch: pass it on reconnect to
+  // resume here, and to AcknowledgeSubscription once the units are held.
+  // Opaque; it binds the history, the event interpretation and the
+  // interest.
+  bytes cursor = 2;
 }
 
-// A single storage mutation within a ChangeEvent.
-message ChangeOp {
-  ChangeOpType type = 1;
+// One committed transaction: the events of it the subscription takes.
+message ChangeUnit {
+  // HLC commit timestamp of the transaction, in wall-clock microseconds
+  // since the Unix epoch with logical increments inside one microsecond.
+  uint64 commit_ts = 1;
 
-  // Storage partition (see coordinode_storage::engine::partition::Partition).
-  uint32 partition = 2;
+  // The Raft log index of the entry carrying it.
+  uint64 log_index = 2;
 
-  // Storage key. Format depends on partition type. For REMOVE_RANGE this carries
-  // the range's inclusive start bound.
-  bytes key = 3;
+  // Its place among the transactions of that entry.
+  uint32 unit = 3;
 
-  // Value bytes. Empty for DELETE ops; carries the merge operand for MERGE. For
-  // REMOVE_RANGE this carries the range's exclusive end bound (the half-open
-  // range deleted is [key, value)).
-  bytes value = 4;
+  // How many events the transaction has in all, taken by the subscription
+  // or not: with the ordinals of the events received, the client tells it
+  // received every event of it its interest takes.
+  uint32 projected = 4;
+
+  // The events the subscription takes, in ordinal order.
+  repeated LogicalChange events = 5;
 }
 
-enum ChangeOpType {
-  CHANGE_OP_TYPE_UNSPECIFIED = 0;
-  INSERT = 1;
-  DELETE = 2;
-  MERGE = 3;
-  NOOP = 4;
-  RAFT_ENTRY = 5;
-  RAFT_TRUNCATION = 6;
-  // Delete every key in the half-open range [key, value) of `partition` with a
-  // single range tombstone. Emitted for a dense contiguous run of deleted keys
-  // (run-length coalescing) or a whole-prefix DROP; the range covers only keys
-  // that are all being deleted, never a surviving key in a gap.
-  REMOVE_RANGE = 7;
+// One effect of a committed transaction.
+message LogicalChange {
+  // Its place among the transaction's events, counted before any
+  // subscription filters them: with `log_index` and `unit`, the event's
+  // identity, the same for every subscription and every delivery of it.
+  uint32 ordinal = 1;
+
+  // What it does to its target.
+  ChangeAction action = 2;
+
+  // What it changes.
+  oneof target {
+    // A node's record, or one version of a temporal node.
+    NodeTarget node = 3;
+    // A relationship's presence.
+    RelationshipTarget relationship = 4;
+    // The properties of a relationship that is neither versioned nor
+    // discriminated.
+    RelationshipTarget properties = 5;
+    // One version or discriminated instance of a relationship, its
+    // properties included.
+    RelationshipTarget instance = 6;
+  }
+
+  // The record or properties a PUT writes, or the delta a PATCH applies, in
+  // the storage encoding; empty for a REMOVE and for a relationship's
+  // presence.
+  bytes payload = 7;
+
+  // How a node event reaches the subscription's labels: APPLY for a
+  // subscription following every label and for every relationship event.
+  ChangeDelivery delivery = 8;
+
+  // The labels a node carried before the transaction, by name; empty for a
+  // relationship event.
+  repeated string labels_before = 9;
+
+  // The labels a node carries after the event, by name; empty for a
+  // relationship event.
+  repeated string labels_after = 10;
+}
+
+// A node and, for a temporal node, the version.
+message NodeTarget {
+  // The node's id.
+  uint64 node_id = 1;
+
+  // The version's start, in milliseconds since the Unix epoch, for a version
+  // of a temporal node.
+  optional int64 valid_from = 2;
+}
+
+// A relationship, by type and endpoints, and its instance when it has one.
+message RelationshipTarget {
+  // The relationship type's name.
+  string edge_type = 1;
+
+  // The source node's id.
+  uint64 source_id = 2;
+
+  // The target node's id.
+  uint64 target_id = 3;
+
+  // The version or discriminator of an instance, in its key encoding; empty
+  // for a relationship's presence or properties.
+  bytes instance = 4;
+}
+
+// What an event does to its target.
+enum ChangeAction {
+  CHANGE_ACTION_UNSPECIFIED = 0;
+  // The target is written whole: it is replaced, or comes to exist. A PUT
+  // does not say which.
+  CHANGE_ACTION_PUT = 1;
+  // The target changes by the payload's delta.
+  CHANGE_ACTION_PATCH = 2;
+  // The target ceases to exist.
+  CHANGE_ACTION_REMOVE = 3;
+}
+
+// How a node event reaches a subscription following some labels.
+enum ChangeDelivery {
+  CHANGE_DELIVERY_UNSPECIFIED = 0;
+  // The node is in the subscription's scope before and after: the event
+  // applies.
+  CHANGE_DELIVERY_APPLY = 1;
+  // The node joins the scope with the record the event writes.
+  CHANGE_DELIVERY_ENTER = 2;
+  // The node leaves the scope: deleted, relabelled or retyped out of it.
+  CHANGE_DELIVERY_LEAVE = 3;
 }
