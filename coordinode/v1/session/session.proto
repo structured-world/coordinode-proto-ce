@@ -365,6 +365,9 @@ message ChangeEventBatch {
   // credit delivers them at once. False when the batch reached everything
   // applied, so further events come as the node applies them.
   bool more = 2;
+
+  // The log entries the batch passed: the credit it used.
+  uint32 entries = 3;
 }
 
 // Acknowledges an acknowledge frame: the registration now holds the history
