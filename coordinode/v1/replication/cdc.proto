@@ -246,6 +246,10 @@ message LogicalChange {
     // What a blob owner holds, by its owner key: a PUT carries the owner
     // record (the blob it now holds, not the blob's bytes), a REMOVE none.
     bytes blob_owner = 12;
+    // A label a DROP ended, by its name when the transaction committed:
+    // `labels_before` names it, `labels_after` is empty. Nodes of it the
+    // same transaction removed are removals of their own.
+    string dropped_label = 13;
   }
 
   // The record or properties a PUT writes, or the delta a PATCH applies, in
@@ -317,6 +321,8 @@ enum ChangeAction {
   // What a type implies changed: its nodes enter and leave label scopes
   // with no node event of their own.
   CHANGE_ACTION_SCOPE_CHANGE = 4;
+  // A label is dropped: its identity ends, its scope with it.
+  CHANGE_ACTION_DROP = 5;
 }
 
 // How a node event reaches a subscription following some labels.
