@@ -167,10 +167,13 @@ message SubscribeRequest {
   ConsumerRetention retention = 5;
 }
 
-// Whole units read from the log, and where the stream continues after them.
+// Units read from the log, and where the stream continues after them.
 message ChangeBatch {
   // The units, in log order. Empty for a batch whose entries carried no
-  // unit; the batch still moves `cursor`.
+  // unit; the batch still moves `cursor`. The first may continue a unit an
+  // earlier batch began, and the last may stop inside one, which the next
+  // batch continues: a transaction with more events than one batch holds
+  // arrives in fragments.
   repeated ChangeUnit units = 1;
 
   // Where the stream continues after this batch: pass it on reconnect to
@@ -180,7 +183,8 @@ message ChangeBatch {
   bytes cursor = 2;
 }
 
-// One committed transaction: the events of it the subscription takes.
+// One committed transaction, or a fragment of one: the events of it in the
+// ordinal range [first_ordinal, end_ordinal) the subscription takes.
 message ChangeUnit {
   // HLC commit timestamp of the transaction, in wall-clock microseconds
   // since the Unix epoch with logical increments inside one microsecond.
@@ -199,6 +203,16 @@ message ChangeUnit {
 
   // The events the subscription takes, in ordinal order.
   repeated LogicalChange events = 5;
+
+  // The first ordinal this delivery covers: zero unless an earlier batch
+  // delivered the transaction's start.
+  uint32 first_ordinal = 6;
+
+  // The ordinal after the last one this delivery covers, taken by the
+  // subscription or not: equal to `projected` when the delivery reaches the
+  // transaction's end. A transaction is complete once its deliveries cover
+  // [0, projected).
+  uint32 end_ordinal = 7;
 }
 
 // One effect of a committed transaction.
