@@ -74,9 +74,6 @@ service ChangeStreamService {
 // Whether a consumer's registration protects the history it still needs.
 // One of the two must be chosen; there is no default.
 message ConsumerRetention {
-  reserved 2;
-  reserved "bounded";
-
   oneof policy {
     // Protection lasts until the consumer is cancelled. Missing heartbeats
     // do not end it, and the log keeps every entry from the acknowledged
@@ -84,7 +81,7 @@ message ConsumerRetention {
     StrictRetention strict = 1;
     // No protection: the registration records the acknowledged position
     // only, and the log's own retention decides how far back it reaches.
-    OrdinaryRetention ordinary = 3;
+    OrdinaryRetention ordinary = 2;
   }
 }
 

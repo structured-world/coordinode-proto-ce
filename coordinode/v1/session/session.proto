@@ -452,11 +452,6 @@ message CursorEnd {
 
 // Acknowledges Commit.
 message Committed {
-  // Field 1 carried the commit's log index unqualified by its history;
-  // `position` replaces it.
-  reserved 1;
-  reserved "applied_index";
-
   // HLC commit timestamp (microseconds since the Unix epoch) every mutation of
   // the transaction was applied at. Server-assigned. Equal to the storage
   // sequence number of the write, so it is the exact snapshot anchor:
@@ -465,12 +460,12 @@ message Committed {
   // `commit_ts + 1`. Present in every mode; a read-only transaction reports
   // its pinned read timestamp. It is the transaction's causal operation
   // time: a causal session folds it into the `after_ts` of what follows.
-  uint64 commit_ts = 2;
+  uint64 commit_ts = 1;
 
   // Where the commit's entry is in its history's log, for a causal read
   // bounded by `ReadConcern.after_position`. Absent outside a replicated
   // group and for a transaction that wrote nothing.
-  coordinode.v1.replication.HistoryPosition position = 3;
+  coordinode.v1.replication.HistoryPosition position = 2;
 }
 
 // Reports an error for a request.
