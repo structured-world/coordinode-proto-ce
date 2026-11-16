@@ -223,6 +223,11 @@ message LogicalChange {
     // One version or discriminated instance of a relationship, its
     // properties included.
     RelationshipTarget instance = 6;
+    // The labels a type implies, as one activation of a change to them
+    // left them: every node of the type gains and loses labels without a
+    // node event of its own. `labels_before` and `labels_after` name the
+    // type and what it implied before and implies after.
+    ScopeTarget scope = 11;
   }
 
   // The record or properties a PUT writes, or the delta a PATCH applies, in
@@ -234,13 +239,25 @@ message LogicalChange {
   // subscription following every label and for every relationship event.
   ChangeDelivery delivery = 8;
 
-  // The labels a node carried before the transaction, by name; empty for a
-  // relationship event.
+  // The labels a node carried before the transaction, its type's implied
+  // ones included, by name; empty for a relationship event.
   repeated string labels_before = 9;
 
-  // The labels a node carries after the event, by name; empty for a
-  // relationship event.
+  // The labels a node carries after the event, its type's implied ones
+  // included, by name; empty for a relationship event.
   repeated string labels_after = 10;
+}
+
+// A type whose implied labels one activation changed.
+message ScopeTarget {
+  // The type's name.
+  string label = 1;
+
+  // The activation that put the change in force: distinct for every change,
+  // a change back to an earlier declaration included. A subscription keeping
+  // state by label reconciles the type's nodes once per activation, or
+  // rebuilds the scope.
+  uint64 activation = 2;
 }
 
 // A node and, for a temporal node, the version.
@@ -279,6 +296,9 @@ enum ChangeAction {
   CHANGE_ACTION_PATCH = 2;
   // The target ceases to exist.
   CHANGE_ACTION_REMOVE = 3;
+  // What a type implies changed: its nodes enter and leave label scopes
+  // with no node event of their own.
+  CHANGE_ACTION_SCOPE_CHANGE = 4;
 }
 
 // How a node event reaches a subscription following some labels.
