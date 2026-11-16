@@ -246,10 +246,11 @@ message LogicalChange {
     // What a blob owner holds, by its owner key: a PUT carries the owner
     // record (the blob it now holds, not the blob's bytes), a REMOVE none.
     bytes blob_owner = 12;
-    // A label a DROP ended, by its name when the transaction committed:
-    // `labels_before` names it, `labels_after` is empty. Nodes of it the
-    // same transaction removed are removals of their own.
-    string dropped_label = 13;
+    // A label a DROP ended: its identity, which a label created later under
+    // the same name does not share. `labels_before` holds it, `labels_after`
+    // is empty. Nodes of it the same transaction removed are removals of
+    // their own.
+    Label dropped_label = 13;
   }
 
   // The record or properties a PUT writes, or the delta a PATCH applies, in
@@ -262,18 +263,31 @@ message LogicalChange {
   ChangeDelivery delivery = 8;
 
   // The labels a node carried before the transaction, its type's implied
-  // ones included, by name; empty for a relationship event.
-  repeated string labels_before = 9;
+  // ones included; empty for a relationship event.
+  repeated Label labels_before = 9;
 
   // The labels a node carries after the event, its type's implied ones
-  // included, by name; empty for a relationship event.
-  repeated string labels_after = 10;
+  // included; empty for a relationship event.
+  repeated Label labels_after = 10;
+}
+
+// A label as the transaction knew it: its identity and its name. A label
+// dropped and created again under the same name is another identity, so
+// two events of the same name and different identities route to different
+// scopes.
+message Label {
+  // The label's identity: assigned when the label is created, never
+  // reused, and ended by its DROP.
+  uint32 id = 1;
+
+  // The name the label was created under.
+  string name = 2;
 }
 
 // A type whose implied labels one activation changed.
 message ScopeTarget {
-  // The type's name.
-  string label = 1;
+  // The type label.
+  Label label = 1;
 
   // The activation that put the change in force: distinct for every change,
   // a change back to an earlier declaration included. A subscription keeping
