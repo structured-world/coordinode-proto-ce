@@ -609,9 +609,27 @@ message RoutedError {
     // The session named no namespace: a tenant-data session selects its
     // namespace explicitly, however many the deployment holds. Nothing ran.
     Empty namespace_required = 59;
+    // A namespace creation named a name a live namespace already holds.
+    // Nothing was created. The text is the name.
+    Text namespace_exists = 60;
+    // A namespace creation named a name no namespace may have. Nothing was
+    // created.
+    NamespaceRefused namespace_refused = 61;
+    // The session named the namespace it works in for dropping: a namespace
+    // is dropped from a session of another. Nothing changed. The text is
+    // the name.
+    Text namespace_in_use = 62;
   }
   reserved 56;
   reserved "members_full";
+}
+
+// A namespace name refused by the catalog.
+message NamespaceRefused {
+  // The name the command gave.
+  string name = 1;
+  // Why no namespace may have it, for a person reading the error.
+  string reason = 2;
 }
 
 // Why a write handed to the replication log has an unknown outcome.
