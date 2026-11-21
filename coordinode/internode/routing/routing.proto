@@ -594,6 +594,10 @@ message RoutedError {
     // The member, or the command's session, runs as many commands at once as
     // it takes. Nothing of the command ran; it may be sent again.
     Empty member_busy = 55;
+    // The member joined its group and has not yet received the group's
+    // namespace: until it has caught up it serves no data. Nothing of the
+    // command ran; it succeeds at a member that serves.
+    Empty not_serving = 57;
   }
   reserved 56;
   reserved "members_full";
