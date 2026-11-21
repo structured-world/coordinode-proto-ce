@@ -69,6 +69,14 @@ message SegmentDescriptorRef {
   // history is complete below. The key range fields are then ignored. A
   // receiver fills a local replacement copy of the generation from it.
   optional uint64 generation = 8;
+
+  // The set of trees the segment is of: the identifier of the namespace whose
+  // partition tree (or index generation) it holds, or 0 for the deployment's
+  // own system set, which holds only the deployment partitions. Set by the
+  // requesting member to the tree it repairs. A data partition named with 0,
+  // or a deployment partition named with a namespace, is refused: no segment
+  // is built from another tree than the one asked for.
+  uint64 namespace = 9;
 }
 
 // Request a segment's transfer manifest from a peer.
