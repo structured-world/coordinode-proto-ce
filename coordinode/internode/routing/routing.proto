@@ -69,6 +69,11 @@ message RoutedRequest {
     // stops, and a transaction it ran in is aborted.
     RoutedCancel cancel = 8;
   }
+  // The name of the namespace the command's client session is bound to: the
+  // member runs a statement, begin, commit or rollback in that namespace and
+  // no other. Required for those commands, which are refused without it;
+  // ignored for operation calls (the deployment's), credit and cancel.
+  string namespace = 9;
 }
 
 // Carries nothing: the message is the signal.
@@ -598,6 +603,9 @@ message RoutedError {
     // namespace: until it has caught up it serves no data. Nothing of the
     // command ran; it succeeds at a member that serves.
     Empty not_serving = 57;
+    // The command named a namespace the deployment holds no live namespace
+    // of: never created, or dropped. Nothing ran. The text is the name.
+    Text unknown_namespace = 58;
   }
   reserved 56;
   reserved "members_full";
