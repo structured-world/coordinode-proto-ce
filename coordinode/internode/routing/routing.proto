@@ -606,9 +606,9 @@ message RoutedError {
     // The command named a namespace the deployment holds no live namespace
     // of: never created, or dropped. Nothing ran. The text is the name.
     Text unknown_namespace = 58;
-    // The session named no namespace where the deployment holds more than
-    // one, or none. Nothing ran. The value is how many it holds.
-    uint64 namespace_required = 59;
+    // The session named no namespace: a tenant-data session selects its
+    // namespace explicitly, however many the deployment holds. Nothing ran.
+    Empty namespace_required = 59;
   }
   reserved 56;
   reserved "members_full";
