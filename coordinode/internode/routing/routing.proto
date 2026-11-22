@@ -619,9 +619,61 @@ message RoutedError {
     // is dropped from a session of another. Nothing changed. The text is
     // the name.
     Text namespace_in_use = 62;
+    // The principal the write acted for lacked a right at the write's place
+    // in the log: the write committed as a refusal and changed nothing.
+    AccessRefused access_refused = 63;
+    // The command acted for a principal bound to another namespace than the
+    // one its session works in. Nothing ran.
+    NamespaceMismatch namespace_mismatch = 64;
   }
   reserved 56;
   reserved "members_full";
+}
+
+// A write refused for a right its principal lacked.
+message AccessRefused {
+  // The principal's stable subject, as its issuer names it.
+  string subject = 1;
+  // The issuer or trust scope the subject belongs to.
+  string trust_scope = 2;
+  // The right the principal lacked when the write was applied.
+  oneof missing {
+    // A role on one namespace.
+    NamespaceRight namespace = 3;
+    // The deployment right to create namespaces.
+    Empty create_namespace = 4;
+    // Every right on the whole deployment.
+    Empty deployment_admin = 5;
+  }
+}
+
+// A role on one namespace that a refused write needed.
+message NamespaceRight {
+  // The namespace's deployment-wide ID; it outlives renames of the namespace.
+  uint64 namespace_id = 1;
+  // The least role on it that would have let the write through.
+  NamespaceRole role = 2;
+}
+
+// A principal's role on a namespace; each grants what the one before it does.
+enum NamespaceRole {
+  // No role: never sent; a receiver reads it as a value it does not know.
+  NAMESPACE_ROLE_UNSPECIFIED = 0;
+  // Reads the namespace's data.
+  NAMESPACE_ROLE_READER = 1;
+  // Reads and writes the namespace's data.
+  NAMESPACE_ROLE_WRITER = 2;
+  // Writes, changes the namespace's schema and indexes, grants and revokes
+  // rights on it, and drops it.
+  NAMESPACE_ROLE_ADMIN = 3;
+}
+
+// A principal bound to another namespace than its session's.
+message NamespaceMismatch {
+  // The name of the namespace the principal is bound to.
+  string principal = 1;
+  // The name of the namespace the session works in.
+  string session = 2;
 }
 
 // A namespace name refused by the catalog.
