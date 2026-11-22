@@ -644,6 +644,10 @@ message AccessRefused {
     Empty create_namespace = 4;
     // Every right on the whole deployment.
     Empty deployment_admin = 5;
+    // Ownership of the 16-byte client-operation issuer named: another
+    // principal enrolled it, the trusted host did, or it does not exist. The
+    // three are refused alike, so the refusal tells nothing of whose it is.
+    bytes issuer = 6;
   }
 }
 
