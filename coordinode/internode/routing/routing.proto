@@ -157,7 +157,8 @@ message RoutedSettings {
   // Causal position in one history's log; absent is no bound.
   RoutedPosition after_position = 9;
   // How long the read may wait for a causal bound not met yet, in
-  // milliseconds; zero refuses it as not ready at once.
+  // milliseconds; zero refuses it as not ready at once. A forwarded read
+  // carries what its ingress left of its wait, one budget for both.
   uint32 causal_wait_ms = 10;
   // Timestamp a snapshot read is pinned to; zero pins none.
   uint64 at_timestamp = 3;
@@ -173,6 +174,14 @@ message RoutedSettings {
   // Memory limit of the statement in bytes; absent takes the executing
   // member's setting.
   optional uint64 query_memory_limit = 7;
+  // The members the read may be served by, numbered as
+  // coordinode.v1.replication.ReadPreference (1 primary, 2 primary
+  // preferred, 3 secondary, 4 secondary preferred, 5 nearest). A read
+  // forwarded because its ingress was behind its bound carries the
+  // preference it was sent with, which the executing member checks against
+  // its own role; zero reads at the leader, as a statement routed there
+  // for leadership does.
+  uint32 read_preference = 11;
 }
 
 // A position in one history's log.
