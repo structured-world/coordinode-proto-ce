@@ -625,6 +625,11 @@ message RoutedError {
     // The command acted for a principal bound to another namespace than the
     // one its session works in. Nothing ran.
     NamespaceMismatch namespace_mismatch = 64;
+    // The member is built without namespaces, principals and access
+    // control, and the command acted for a principal or asked for the
+    // catalog of namespaces or grants. Nothing ran. The text names what was
+    // asked.
+    Text without_tenancy = 65;
   }
   reserved 56;
   reserved "members_full";
