@@ -315,6 +315,9 @@ message RoutedStats {
   // The timestamp the statement read at: every commit at or below it that
   // its view held; zero for none.
   uint64 read_ts = 10;
+  // Whether the executing member led its group when it served the
+  // statement: a read forwarded to a follower is not served by the leader.
+  bool served_by_leader = 11;
 }
 
 // Open an interactive transaction.
