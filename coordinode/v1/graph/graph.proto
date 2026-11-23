@@ -66,15 +66,18 @@ message Node {
   // Use this as the primary node reference in application code.
   string element_id = 4;
 
-  // The version of this node: the HLC timestamp of the commit that last wrote
-  // it. This is the value a conditional write is stated against
-  // (CommitTransactionRequest.expect), and it is the same number a write
-  // receipt returns as commit_ts, so a read and a later write speak of one
-  // thing rather than two.
+  // The version of this node: the HLC timestamp of the commit that wrote the
+  // state returned in this message. This is the value a conditional write is
+  // stated against (CommitTransactionRequest.expect), and it is the same
+  // number a write receipt returns as commit_ts, so a read and a later write
+  // speak of one thing rather than two.
   //
-  // Zero means the server did not resolve a version for this node, not that
-  // the node is at version zero: a node that exists always has the commit
-  // that wrote it.
+  // On a read it is the version the read saw, so the properties and the
+  // version describe one write even if another lands meanwhile; on a create
+  // it is the creating commit. It is kept through compaction, restart and
+  // replication. A node whose original commit is not known is not reported
+  // with a version: the call fails with FAILED_PRECONDITION, reason
+  // REVISION_UNAVAILABLE. A version is never zero.
   uint64 version = 5;
 }
 

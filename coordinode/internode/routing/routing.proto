@@ -642,6 +642,10 @@ message RoutedError {
     // catalog of namespaces or grants. Nothing ran. The text names what was
     // asked.
     Text without_tenancy = 65;
+    // A version was asked of a record, or a write conditioned on one, whose
+    // original commit is not known: it came from a store that did not keep
+    // it. Nothing was written. The text names the record's partition.
+    Text revision_unavailable = 66;
   }
   reserved 56;
   reserved "members_full";
