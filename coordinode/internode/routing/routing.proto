@@ -646,6 +646,9 @@ message RoutedError {
     // original commit is not known: it came from a store that did not keep
     // it. Nothing was written. The text names the record's partition.
     Text revision_unavailable = 66;
+    // A write would give a list a document property declares as unordered
+    // members one member twice. Nothing was written.
+    DuplicateMember duplicate_member = 67;
   }
   reserved 56;
   reserved "members_full";
@@ -973,6 +976,15 @@ message DuplicateKey {
   string key = 2;
   // The elementId of the row that holds it.
   string element_id = 3;
+}
+
+// A member a list of unordered members would hold twice.
+message DuplicateMember {
+  // The document property whose definition declares the list.
+  string property = 1;
+  // The fields leading from the property to the list, joined by a dot;
+  // empty when the property's own value is the list.
+  string path = 2;
 }
 
 // A unique value with a holder already.
